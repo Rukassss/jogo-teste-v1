@@ -1,0 +1,3256 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+<meta charset="UTF-8">
+<title>BEYOND TIME</title>
+<style>
+  body { margin: 0; background: #0a0a14; display: flex; justify-content: center; align-items: center; height: 100vh; font-family: monospace; overflow: hidden; }
+  canvas { border: 2px solid #444; image-rendering: pixelated; cursor: default; }
+</style>
+</head>
+<body>
+<canvas id="game" width="1280" height="720"></canvas>
+
+<script>
+// ============================================================
+// CONFIGURAÇÃO INICIAL
+// ============================================================
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d');
+ctx.imageSmoothingEnabled = false;
+
+const LARGURA = 1280;
+const ALTURA = 720;
+const ALTURA_CHAO = 670;
+const PLAYER_TAM = 256;
+
+const keys = {};
+let keysPress = {};
+document.addEventListener('keydown', e => {
+  if (!keys[e.key]) keysPress[e.key] = true;
+  keys[e.key] = true;
+  if (e.key === ' ' || e.key === 'ArrowUp' || e.key === 'ArrowDown') e.preventDefault();
+});
+document.addEventListener('keyup', e => { keys[e.key] = false; });
+
+const mouse = { x: 0, y: 0, clicou: false, pressionado: false };
+canvas.addEventListener('mousemove', e => {
+  const rect = canvas.getBoundingClientRect();
+  mouse.x = (e.clientX - rect.left) * (canvas.width / rect.width);
+  mouse.y = (e.clientY - rect.top) * (canvas.height / rect.height);
+});
+canvas.addEventListener('mousedown', () => { mouse.clicou = true; mouse.pressionado = true; });
+canvas.addEventListener('mouseup', () => { mouse.clicou = false; mouse.pressionado = false; });
+canvas.addEventListener('mouseleave', () => { mouse.pressionado = false; });
+
+// ============================================================
+// ESTADO GERAL
+// ============================================================
+let telaAtual = 'menu';
+let temSave = localStorage.getItem('beyondtime_save') !== null;
+let fasesLiberadas = parseInt(localStorage.getItem('beyondtime_fases') || '1');
+let popupAtivo = null;
+let inventarioAberto = false;
+let atributosAberto = false;
+let camera = { x: 0 };
+let faseAtual = 1;
+let MUNDO_LARGURA = 7680;
+let timeoutVitoria = null;
+let itemArrastando = null;
+
+// ============================================================
+// CARREGADOR DE ANIMAÇÕES
+// ============================================================
+function criarAnimacoes(config) {
+  const anims = {};
+  for (const nome in config) {
+    const c = config[nome];
+    const img = new Image();
+    img.src = c.src;
+    img.onerror = () => console.warn('Falha:', c.src);
+    anims[nome] = { img, frames: c.frames, frameW: c.frameW, frameH: c.frameH, velocidade: c.velocidade };
+  }
+  return anims;
+}
+
+// Player
+const playerAnims = criarAnimacoes({
+  idle:     { src: 'assets/player/idle.png',     frames: 6,  frameW: 128, frameH: 128, velocidade: 8 },
+  walk:     { src: 'assets/player/walk.png',     frames: 8,  frameW: 128, frameH: 128, velocidade: 6 },
+  run:      { src: 'assets/player/run.png',      frames: 8,  frameW: 128, frameH: 128, velocidade: 4 },
+  jump:     { src: 'assets/player/jump.png',     frames: 12, frameW: 128, frameH: 128, velocidade: 5 },
+  attack:   { src: 'assets/player/attack.png',   frames: 6,  frameW: 128, frameH: 128, velocidade: 4 },
+  attack_2: { src: 'assets/player/attack_2.png', frames: 4,  frameW: 128, frameH: 128, velocidade: 4 },
+  attack_3: { src: 'assets/player/attack_3.png', frames: 3,  frameW: 128, frameH: 128, velocidade: 4 },
+  hurt:     { src: 'assets/player/hurt.png',     frames: 2,  frameW: 128, frameH: 128, velocidade: 6 },
+  death:    { src: 'assets/player/death.png',    frames: 3,  frameW: 128, frameH: 128, velocidade: 5 },
+  shield:   { src: 'assets/player/shield.png',   frames: 2,  frameW: 128, frameH: 128, velocidade: 8 }
+});
+
+// Gorgons
+function carregarGorgon(pasta) {
+  return criarAnimacoes({
+    idle:   { src: `assets/inimigos/gorgons/${pasta}/idle.png`,   frames: 7,  frameW: 128, frameH: 128, velocidade: 8 },
+    walk:   { src: `assets/inimigos/gorgons/${pasta}/walk.png`,   frames: 13, frameW: 128, frameH: 128, velocidade: 6 },
+    run:    { src: `assets/inimigos/gorgons/${pasta}/run.png`,    frames: 7,  frameW: 128, frameH: 128, velocidade: 4 },
+    hurt:   { src: `assets/inimigos/gorgons/${pasta}/hurt.png`,   frames: 3,  frameW: 128, frameH: 128, velocidade: 6 },
+    death:  { src: `assets/inimigos/gorgons/${pasta}/death.png`,  frames: 3,  frameW: 128, frameH: 128, velocidade: 8 },
+    attack: { src: `assets/inimigos/gorgons/${pasta}/attack_1.png`, frames: 16, frameW: 128, frameH: 128, velocidade: 4 }
+  });
+}
+
+const gorgonNormalAnims = criarAnimacoes({
+  idle:   { src: 'assets/inimigos/gorgons/normal/idle.png',   frames: 7,  frameW: 128, frameH: 128, velocidade: 8 },
+  walk:   { src: 'assets/inimigos/gorgons/normal/walk.png',   frames: 13, frameW: 128, frameH: 128, velocidade: 6 },
+  attack: { src: 'assets/inimigos/gorgons/normal/attack.png', frames: 16, frameW: 128, frameH: 128, velocidade: 4 },
+  hurt:   { src: 'assets/inimigos/gorgons/normal/hurt.png',   frames: 3,  frameW: 128, frameH: 128, velocidade: 6 },
+  death:  { src: 'assets/inimigos/gorgons/normal/death.png',  frames: 3,  frameW: 128, frameH: 128, velocidade: 8 }
+});
+
+const gorgonChefeAnims = criarAnimacoes({
+  idle:     { src: 'assets/inimigos/gorgons/chefe/idle.png',     frames: 7,  frameW: 128, frameH: 128, velocidade: 8 },
+  walk:     { src: 'assets/inimigos/gorgons/chefe/walk.png',     frames: 13, frameW: 128, frameH: 128, velocidade: 6 },
+  run:      { src: 'assets/inimigos/gorgons/chefe/run.png',      frames: 7,  frameW: 128, frameH: 128, velocidade: 4 },
+  idle_2:   { src: 'assets/inimigos/gorgons/chefe/idle_2.png',   frames: 5,  frameW: 128, frameH: 128, velocidade: 8 },
+  special:  { src: 'assets/inimigos/gorgons/chefe/special.png',  frames: 5,  frameW: 128, frameH: 128, velocidade: 6 },
+  attack:   { src: 'assets/inimigos/gorgons/chefe/attack_1.png', frames: 16, frameW: 128, frameH: 128, velocidade: 4 },
+  attack_2: { src: 'assets/inimigos/gorgons/chefe/attack_2.png', frames: 10, frameW: 128, frameH: 128, velocidade: 4 },
+  attack_3: { src: 'assets/inimigos/gorgons/chefe/attack_3.png', frames: 7,  frameW: 128, frameH: 128, velocidade: 4 },
+  hurt:     { src: 'assets/inimigos/gorgons/chefe/hurt.png',     frames: 3,  frameW: 128, frameH: 128, velocidade: 6 },
+  death:    { src: 'assets/inimigos/gorgons/chefe/death.png',    frames: 3,  frameW: 128, frameH: 128, velocidade: 8 }
+});
+
+const gorgonVerdeAnims = carregarGorgon('verde');
+const gorgonRoxoAnims = carregarGorgon('roxo');
+const gorgonPardoAnims = carregarGorgon('pardo');
+
+// Yokais
+const yokai1Anims = criarAnimacoes({
+  idle:     { src: 'assets/inimigos/yokais/yokai_1/idle.png',     frames: 6,  frameW: 128, frameH: 128, velocidade: 8 },
+  idle_2:   { src: 'assets/inimigos/yokais/yokai_1/idle_2.png',   frames: 5,  frameW: 128, frameH: 128, velocidade: 8 },
+  walk:     { src: 'assets/inimigos/yokais/yokai_1/walk.png',     frames: 8,  frameW: 128, frameH: 128, velocidade: 6 },
+  run:      { src: 'assets/inimigos/yokais/yokai_1/run.png',      frames: 8,  frameW: 128, frameH: 128, velocidade: 4 },
+  jump:     { src: 'assets/inimigos/yokais/yokai_1/jump.png',     frames: 15, frameW: 128, frameH: 128, velocidade: 5 },
+  attack:   { src: 'assets/inimigos/yokais/yokai_1/attack_1.png', frames: 3,  frameW: 128, frameH: 128, velocidade: 4 },
+  attack_2: { src: 'assets/inimigos/yokais/yokai_1/attack_2.png', frames: 6,  frameW: 128, frameH: 128, velocidade: 4 },
+  attack_3: { src: 'assets/inimigos/yokais/yokai_1/attack_3.png', frames: 4,  frameW: 128, frameH: 128, velocidade: 4 },
+  hurt:     { src: 'assets/inimigos/yokais/yokai_1/hurt.png',     frames: 3,  frameW: 128, frameH: 128, velocidade: 6 },
+  death:    { src: 'assets/inimigos/yokais/yokai_1/death.png',    frames: 6,  frameW: 128, frameH: 128, velocidade: 8 }
+});
+
+const yokai2Anims = criarAnimacoes({
+  idle:     { src: 'assets/inimigos/yokais/yokai_2/idle.png',     frames: 6,  frameW: 128, frameH: 128, velocidade: 8 },
+  idle_2:   { src: 'assets/inimigos/yokais/yokai_2/idle_2.png',   frames: 5,  frameW: 128, frameH: 128, velocidade: 8 },
+  walk:     { src: 'assets/inimigos/yokais/yokai_2/walk.png',     frames: 8,  frameW: 128, frameH: 128, velocidade: 6 },
+  run:      { src: 'assets/inimigos/yokais/yokai_2/run.png',      frames: 8,  frameW: 128, frameH: 128, velocidade: 4 },
+  jump:     { src: 'assets/inimigos/yokais/yokai_2/jump.png',     frames: 15, frameW: 128, frameH: 128, velocidade: 5 },
+  attack:   { src: 'assets/inimigos/yokais/yokai_2/attack_1.png', frames: 6,  frameW: 128, frameH: 128, velocidade: 4 },
+  attack_2: { src: 'assets/inimigos/yokais/yokai_2/attack_2.png', frames: 4,  frameW: 128, frameH: 128, velocidade: 4 },
+  attack_3: { src: 'assets/inimigos/yokais/yokai_2/attack_3.png', frames: 3,  frameW: 128, frameH: 128, velocidade: 4 },
+  hurt:     { src: 'assets/inimigos/yokais/yokai_2/hurt.png',     frames: 3,  frameW: 128, frameH: 128, velocidade: 6 },
+  death:    { src: 'assets/inimigos/yokais/yokai_2/death.png',    frames: 6,  frameW: 128, frameH: 128, velocidade: 8 }
+});
+
+const chefeYokaiAnims = criarAnimacoes({
+  idle:     { src: 'assets/inimigos/yokais/chefe_yokai/idle.png',     frames: 8,  frameW: 128, frameH: 128, velocidade: 8 },
+  idle_2:   { src: 'assets/inimigos/yokais/chefe_yokai/idle_2.png',   frames: 6,  frameW: 128, frameH: 128, velocidade: 8 },
+  walk:     { src: 'assets/inimigos/yokais/chefe_yokai/walk.png',     frames: 8,  frameW: 128, frameH: 128, velocidade: 6 },
+  run:      { src: 'assets/inimigos/yokais/chefe_yokai/run.png',      frames: 8,  frameW: 128, frameH: 128, velocidade: 4 },
+  jump:     { src: 'assets/inimigos/yokais/chefe_yokai/jump.png',     frames: 10, frameW: 128, frameH: 128, velocidade: 5 },
+  attack:   { src: 'assets/inimigos/yokais/chefe_yokai/attack_1.png', frames: 10, frameW: 128, frameH: 128, velocidade: 4 },
+  attack_2: { src: 'assets/inimigos/yokais/chefe_yokai/attack_2.png', frames: 10, frameW: 128, frameH: 128, velocidade: 4 },
+  attack_3: { src: 'assets/inimigos/yokais/chefe_yokai/attack_3.png', frames: 7,  frameW: 128, frameH: 128, velocidade: 4 },
+  hurt:     { src: 'assets/inimigos/yokais/chefe_yokai/hurt.png',     frames: 2,  frameW: 128, frameH: 128, velocidade: 6 },
+  death:    { src: 'assets/inimigos/yokais/chefe_yokai/death.png',    frames: 10, frameW: 128, frameH: 128, velocidade: 8 }
+});
+
+// Fundos — 6 fases + menu
+const fundoImg = new Image();
+fundoImg.src = 'assets/cenario/fundo.png';
+const fundo2Img = new Image();
+fundo2Img.src = 'assets/cenario/fundo2.png';
+const fundo3Img = new Image();
+fundo3Img.src = 'assets/cenario/fundo3.png';
+const fundo4Img = new Image();
+fundo4Img.src = 'assets/cenario/fundo4.png';
+const fundo5Img = new Image();
+fundo5Img.src = 'assets/cenario/fundo5.png';
+const fundo6Img = new Image();
+fundo6Img.src = 'assets/cenario/fundo6.png';
+const menuFundoImg = new Image();
+menuFundoImg.src = 'assets/cenario/menu.png';
+menuFundoImg.onerror = () => console.warn('Falha ao carregar menu.png');
+
+// ============================================================
+// SONS
+// ============================================================
+const sonsPlayer = {
+  ataque:          new Audio('assets/sons/player/ataque.mp3'),
+  ataque2:         new Audio('assets/sons/player/ataque2.mp3'),
+  ataque3:         new Audio('assets/sons/player/ataque3.mp3'),
+  impacto:         new Audio('assets/sons/player/impacto.mp3'),
+  critico:         new Audio('assets/sons/player/critico.mp3'),
+  pulo:            new Audio('assets/sons/player/pulo.mp3'),
+  aterrissar:      new Audio('assets/sons/player/aterrissar.mp3'),
+  dano:            new Audio('assets/sons/player/dano.mp3'),
+  morte:           new Audio('assets/sons/player/morte.mp3'),
+  levelup:         new Audio('assets/sons/player/levelup.mp3'),
+  corrida:         new Audio('assets/sons/player/corrida.mp3'),
+  passo:           new Audio('assets/sons/player/passo.mp3'),
+  cura:            new Audio('assets/sons/player/cura.mp3'),
+  dash:            new Audio('assets/sons/player/dash.mp3'),
+  defesa_bloqueio: new Audio('assets/sons/player/defesa_bloqueio.mp3'),
+  defesa:          new Audio('assets/sons/player/defesa.mp3')
+};
+
+const sonsInimigos = {
+  gorgon_ataque:  new Audio('assets/sons/inimigos/gorgon/ataque.mp3'),
+  gorgon_dano:    new Audio('assets/sons/inimigos/gorgon/dano.mp3'),
+  gorgon_morte:   new Audio('assets/sons/inimigos/gorgon/morte.mp3'),
+  yokai_ataque:   new Audio('assets/sons/inimigos/yokai/ataque.mp3'),
+  yokai_dano:     new Audio('assets/sons/inimigos/yokai/dano.mp3'),
+  yokai_morte:    new Audio('assets/sons/inimigos/yokai/morte.mp3'),
+  chefe_ataque:   new Audio('assets/sons/inimigos/chefe/ataque.mp3'),
+  chefe_dano:     new Audio('assets/sons/inimigos/chefe/dano.mp3'),
+  chefe_morte:    new Audio('assets/sons/inimigos/chefe/morte.mp3')
+};
+
+const musicas = {
+  fase1: new Audio('assets/sons/musicas/musica_fase1.mp3'),
+  fase2: new Audio('assets/sons/musicas/musica_fase2.mp3'),
+  fase3: new Audio('assets/sons/musicas/musica_fase3.mp3'),
+  fase4: new Audio('assets/sons/musicas/musica_fase4.mp3'),
+  fase5: new Audio('assets/sons/musicas/musica_fase5.mp3'),
+  fase6: new Audio('assets/sons/musicas/musica_fase6.mp3')
+};
+musicas.fase1.loop = true;
+musicas.fase2.loop = true;
+musicas.fase3.loop = true;
+musicas.fase4.loop = true;
+musicas.fase5.loop = true;
+musicas.fase6.loop = true;
+
+let musicaAtual = null;
+let volumeMusica = 0.5;
+let volumeSFX = 0.7;
+let mutado = false;
+let sliderArrastando = null;
+
+function tocarSom(nome) {
+  const som = sonsPlayer[nome] || sonsInimigos[nome];
+  if (!som) return;
+  try {
+    som.currentTime = 0;
+    som.volume = mutado ? 0 : volumeSFX;
+    som.play().catch(() => { /* autoplay */ });
+  } catch (e) { /* ignora */ }
+}
+
+function aplicarVolumeSons() {
+  const v = mutado ? 0 : volumeSFX;
+  for (const nome in sonsPlayer) sonsPlayer[nome].volume = v;
+  for (const nome in sonsInimigos) sonsInimigos[nome].volume = v;
+}
+
+function aplicarVolume() {
+  const vMus = mutado ? 0 : volumeMusica;
+  musicas.fase1.volume = vMus;
+  musicas.fase2.volume = vMus;
+  musicas.fase3.volume = vMus;
+  musicas.fase4.volume = vMus;
+  musicas.fase5.volume = vMus;
+  musicas.fase6.volume = vMus;
+  aplicarVolumeSons();
+}
+aplicarVolume();
+
+function tocarMusica(nome) {
+  if (musicaAtual === nome) return;
+  if (musicaAtual) {
+    musicas[musicaAtual].pause();
+    musicas[musicaAtual].currentTime = 0;
+  }
+  if (musicas[nome]) {
+    musicas[nome].currentTime = 0;
+    musicas[nome].play().catch(() => { /* autoplay */ });
+    musicaAtual = nome;
+  }
+}
+
+function pararMusica() {
+  if (musicaAtual) {
+    musicas[musicaAtual].pause();
+    musicas[musicaAtual].currentTime = 0;
+    musicaAtual = null;
+  }
+}
+
+// ============================================================
+// ATRIBUTOS
+// ============================================================
+const ATRIBUTOS = {
+  forca:      { nome: 'FORÇA',      desc: '+2 dano por ponto' },
+  vitalidade: { nome: 'VITALIDADE', desc: '+10 HP máx por ponto' },
+  agilidade:  { nome: 'AGILIDADE',  desc: '+0.2 velocidade por ponto' },
+  destreza:   { nome: 'DESTREZA',   desc: '+1% crítico por ponto' },
+  stamina:    { nome: 'STAMINA',    desc: '+5 stamina máx por ponto (a cada 3 níveis)' }
+};
+
+// ============================================================
+// CONFIGURAÇÃO DE FASES
+// ============================================================
+const CONFIG_FASES = {
+  1: { nome: 'Santuário',  conjunto: 'Guardião',
+       comumMin: 1,   comumMax: 5,   mergeMax: 10,  chefeMin: 10,  chefeMax: 20 },
+  2: { nome: 'Espíritos',  conjunto: 'Yokai',
+       comumMin: 10,  comumMax: 20,  mergeMax: 40,  chefeMin: 20,  chefeMax: 40 },
+  3: { nome: 'Abismo',     conjunto: 'Abismo',
+       comumMin: 20,  comumMax: 40,  mergeMax: 80,  chefeMin: 40,  chefeMax: 80 },
+  4: { nome: 'Dragão',     conjunto: 'Dragão',
+       comumMin: 40,  comumMax: 80,  mergeMax: 160, chefeMin: 80,  chefeMax: 160 },
+  5: { nome: 'Celestial',  conjunto: 'Celestial',
+       comumMin: 80,  comumMax: 160, mergeMax: 320, chefeMin: 160, chefeMax: 320 },
+  6: { nome: 'Vazio',      conjunto: 'Vazio',
+       comumMin: 160, comumMax: 320, mergeMax: 640, chefeMin: 320, chefeMax: 640 }
+};
+
+function getConfigFase() {
+  return CONFIG_FASES[faseAtual] || CONFIG_FASES[1];
+}
+
+// Épicos por fase (6 itens cada)
+const EPICOS_POR_FASE = {
+  1: ['Lâmina do Guardião', 'Elmo do Guardião', 'Peitoral do Guardião', 'Botas do Guardião', 'Manoplas do Guardião', 'Anel do Guardião'],
+  2: ['Katana do Yokai', 'Máscara do Yokai', 'Quimono do Yokai', 'Sandálias do Yokai', 'Garras do Yokai', 'Anel do Yokai'],
+  3: ['Lâmina do Abismo', 'Capuz do Abismo', 'Coraça do Abismo', 'Grevas do Abismo', 'Punhos do Abismo', 'Selo do Abismo'],
+  4: ['Espada do Dragão', 'Elmo do Dragão', 'Escamas do Dragão', 'Botas do Dragão', 'Garras do Dragão', 'Olho do Dragão'],
+  5: ['Espada Celestial', 'Coroa Celestial', 'Armadura Celestial', 'Botas Celestiais', 'Manoplas Celestiais', 'Anel Celestial'],
+  6: ['Espada do Vazio', 'Máscara do Vazio', 'Manto do Vazio', 'Botas do Vazio', 'Luvas do Vazio', 'Núcleo do Vazio']
+};
+const TIPOS_EPICOS = ['arma', 'capacete', 'armadura', 'botas', 'luvas', 'anel'];
+
+// ============================================================
+// ITENS BASE (só a espada básica inicial)
+// ============================================================
+const ITENS = {
+  espada_basica: {
+    nome: 'Espada Básica', tipo: 'arma', cor: '#aaa',
+    desc: 'Uma espada simples de ferro. Confiável, mas nada especial.',
+    bonus: { forca: 2 },
+    img: new Image(), src: 'assets/itens/espada_basica.png'
+  }
+};
+
+ITENS.espada_basica.img.src = ITENS.espada_basica.src;
+ITENS.espada_basica.img.onerror = () => console.warn('Falha ao carregar:', ITENS.espada_basica.src);
+
+// ============================================================
+// SLOTS DE EQUIPAMENTO — 8 slots
+// ============================================================
+const SLOTS_INFO = [
+  { id: 'arma_1',    nome: 'Espada 1',  coluna: 0, linha: 0 },
+  { id: 'capacete',  nome: 'Capacete',  coluna: 0, linha: 1 },
+  { id: 'armadura',  nome: 'Armadura',  coluna: 0, linha: 2 },
+  { id: 'botas',     nome: 'Botas',     coluna: 0, linha: 3 },
+  { id: 'luvas',     nome: 'Luvas',     coluna: 0, linha: 4 },
+  { id: 'arma_2',    nome: 'Espada 2',  coluna: 1, linha: 0 },
+  { id: 'anel_1',    nome: 'Anel 1',    coluna: 1, linha: 1 },
+  { id: 'anel_2',    nome: 'Anel 2',    coluna: 1, linha: 2 }
+];
+
+// ============================================================
+// GERADOR DE ITENS
+// ============================================================
+function gerarItemComum() {
+  const cfg = getConfigFase();
+  const tipos = ['espada', 'capacete', 'armadura', 'botas', 'luvas', 'anel'];
+  const tipo = tipos[Math.floor(Math.random() * tipos.length)];
+  const bonus = Math.floor(Math.random() * (cfg.comumMax - cfg.comumMin + 1)) + cfg.comumMin;
+
+  const id = tipo + '_comum_' + Date.now() + '_' + Math.floor(Math.random() * 100000);
+
+  let tipoSlot = tipo === 'espada' ? 'arma' : tipo;
+  let bonusObj = {};
+
+  if (tipo === 'espada')   bonusObj = { forca: bonus };
+  if (tipo === 'capacete') bonusObj = { vitalidade: bonus };
+  if (tipo === 'armadura') bonusObj = { vitalidade: bonus, forca: Math.floor(bonus / 2) };
+  if (tipo === 'botas')    bonusObj = { agilidade: bonus };
+  if (tipo === 'luvas')    bonusObj = { destreza: bonus };
+  if (tipo === 'anel')     bonusObj = { forca: bonus, vitalidade: bonus };
+
+  const imgComum = new Image();
+  imgComum.src = 'assets/itens/comum_' + tipo + '.png';
+  imgComum.onerror = () => { /* silencioso */ };
+
+  ITENS[id] = {
+    nome: tipo.charAt(0).toUpperCase() + tipo.slice(1) + ' Comum (+' + bonus + ')',
+    tipo: tipoSlot,
+    cor: '#8f8',
+    desc: 'Item comum dropado de inimigos. Pode ser fundido com outro igual.',
+    bonus: bonusObj,
+    img: imgComum,
+    src: 'assets/itens/comum_' + tipo + '.png'
+  };
+
+  return id;
+}
+
+function gerarEpico() {
+  const cfg = getConfigFase();
+  const epicos = EPICOS_POR_FASE[faseAtual] || EPICOS_POR_FASE[1];
+  const bonus = Math.floor(Math.random() * (cfg.chefeMax - cfg.chefeMin + 1)) + cfg.chefeMin;
+
+  const idx = Math.floor(Math.random() * 6);
+  const nomeEpico = epicos[idx];
+  const tipo = TIPOS_EPICOS[idx];
+
+  const id = tipo + '_epico_' + Date.now() + '_' + Math.floor(Math.random() * 100000);
+
+  let bonusObj = {};
+  if (tipo === 'arma')     bonusObj = { forca: bonus, destreza: Math.floor(bonus / 3) };
+  if (tipo === 'capacete') bonusObj = { vitalidade: bonus, agilidade: Math.floor(bonus / 3) };
+  if (tipo === 'armadura') bonusObj = { vitalidade: bonus, forca: Math.floor(bonus / 2) };
+  if (tipo === 'botas')    bonusObj = { agilidade: bonus, destreza: Math.floor(bonus / 3) };
+  if (tipo === 'luvas')    bonusObj = { destreza: bonus, forca: Math.floor(bonus / 2) };
+  if (tipo === 'anel')     bonusObj = { forca: bonus, vitalidade: bonus, agilidade: bonus, destreza: bonus };
+
+  const imgEpico = new Image();
+  imgEpico.src = 'assets/itens/comum_' + tipo + '.png';
+  imgEpico.onerror = () => { /* silencioso */ };
+
+  ITENS[id] = {
+    nome: nomeEpico + ' (+' + bonus + ')',
+    tipo: tipo,
+    cor: '#ff0',
+    desc: 'Item lendário dropado do chefe. Pode ser fundido com outro igual.',
+    bonus: bonusObj,
+    img: imgEpico,
+    src: 'assets/itens/comum_' + tipo + '.png'
+  };
+
+  return id;
+}
+
+function gerarItemChefe() {
+  const cfg = getConfigFase();
+  const tipos = ['espada', 'capacete', 'armadura', 'botas', 'luvas', 'anel'];
+  const tipo = tipos[Math.floor(Math.random() * tipos.length)];
+  const bonus = Math.floor(Math.random() * (cfg.chefeMax - cfg.chefeMin + 1)) + cfg.chefeMin;
+
+  const id = tipo + '_chefe_' + Date.now() + '_' + Math.floor(Math.random() * 100000);
+
+  let tipoSlot = tipo === 'espada' ? 'arma' : tipo;
+  let bonusObj = {};
+
+  if (tipo === 'espada')   bonusObj = { forca: bonus };
+  if (tipo === 'capacete') bonusObj = { vitalidade: bonus };
+  if (tipo === 'armadura') bonusObj = { vitalidade: bonus, forca: Math.floor(bonus / 2) };
+  if (tipo === 'botas')    bonusObj = { agilidade: bonus };
+  if (tipo === 'luvas')    bonusObj = { destreza: bonus };
+  if (tipo === 'anel')     bonusObj = { forca: bonus, vitalidade: bonus };
+
+  const imgChefe = new Image();
+  imgChefe.src = 'assets/itens/comum_' + tipo + '.png';
+  imgChefe.onerror = () => { /* silencioso */ };
+
+  ITENS[id] = {
+    nome: tipo.charAt(0).toUpperCase() + tipo.slice(1) + ' do Chefe (+' + bonus + ')',
+    tipo: tipoSlot,
+    cor: '#f80',
+    desc: 'Item dropado de um chefe. Pode ser fundido com outro igual.',
+    bonus: bonusObj,
+    img: imgChefe,
+    src: 'assets/itens/comum_' + tipo + '.png'
+  };
+
+  return id;
+}
+
+// ============================================================
+// PLAYER
+// ============================================================
+const player = {};
+
+function resetarPlayer() {
+  player.x = 100;
+  player.y = ALTURA_CHAO - PLAYER_TAM;
+  player.w = PLAYER_TAM;
+  player.h = PLAYER_TAM;
+  player.vx = 0;
+  player.vy = 0;
+  player.baseSpeed = 4;
+  player.runSpeed = 7;
+  player.jumpForce = -18;
+  player.onGround = false;
+  player.estavaNoAr = false;
+  player.facing = 1;
+  player.hp = 100;
+  player.invuln = 0;
+  player.correndo = false;
+  player.animAtual = 'idle';
+  player.frameAtual = 0;
+  player.frameTimer = 0;
+
+  player.nivel = 1;
+  player.xp = 0;
+  player.xpProximo = 100;
+  player.pontosDisponiveis = 5;
+  player.atributos = { forca: 0, vitalidade: 0, agilidade: 0, destreza: 0, stamina: 0 };
+  player.stamina = 100;
+  player.staminaTimer = 0;
+  player.pontosStamina = 0;
+  player.inventario = ['espada_basica'];
+  player.equipados = {
+    arma_1: null, arma_2: null,
+    capacete: null, armadura: null, botas: null, luvas: null,
+    anel_1: null, anel_2: null
+  };
+
+  player.atacando = false;
+  player.atkTimer = 0;
+  player.atkDuracao = 0;
+  player.atkCooldown = 0;
+  player.atkAtual = null;
+  player.defendendo = false;
+  player.stunTimer = 0;
+  player.emStun = false;
+  player.morrendo = false;
+  player.morteTimer = 0;
+
+  player.tempoSemDano = 0;
+  player.tempoSemMexer = 0;
+  player.regenerando = false;
+  player.regenTimer = 0;
+  player.somPassoTimer = 0;
+}
+
+resetarPlayer();
+
+function atributosTotais() {
+  const total = { forca: 0, vitalidade: 0, agilidade: 0, destreza: 0, stamina: 0 };
+  for (const k in player.atributos) total[k] += player.atributos[k];
+  for (const slot in player.equipados) {
+    const id = player.equipados[slot];
+    if (!id) continue;
+    const item = ITENS[id];
+    if (!item || !item.bonus) continue;
+    for (const k in item.bonus) total[k] += item.bonus[k];
+  }
+  return total;
+}
+
+function derivados() {
+  const t = atributosTotais();
+  return {
+    dano: 10 + t.forca * 2,
+    hpMax: 200 + t.vitalidade * 10,
+    velocidade: player.baseSpeed + t.agilidade * 0.2,
+    velocidadeCorrida: player.runSpeed + t.agilidade * 0.2,
+    critChance: t.destreza * 0.01,
+    staminaMax: 100 + t.stamina * 5
+  };
+}
+
+// ============================================================
+// FIM DA PARTE 1 — CONTINUA NA PARTE 2
+// ============================================================
+
+// ============================================================
+// INIMIGOS
+// ============================================================
+const ground = { x: 0, y: ALTURA_CHAO, w: 20000, h: 50 };
+let inimigos = [];
+const numerosFlutuantes = [];
+const particulas = [];
+let mensagem = { texto: '', timer: 0 };
+
+// ============================================================
+// SISTEMA DE PARTÍCULAS
+// ============================================================
+function criarParticulasImpacto(x, y, critico) {
+  const quantidade = critico ? 20 : 12;
+  for (let i = 0; i < quantidade; i++) {
+    const angulo = (Math.random() * Math.PI * 2);
+    const velocidade = critico ? (Math.random() * 8 + 3) : (Math.random() * 5 + 2);
+    particulas.push({
+      x: x, y: y,
+      vx: Math.cos(angulo) * velocidade,
+      vy: Math.sin(angulo) * velocidade - 2,
+      tamanho: critico ? (Math.random() * 5 + 3) : (Math.random() * 4 + 2),
+      vida: critico ? 35 : 25,
+      vidaMax: critico ? 35 : 25,
+      cor: critico
+        ? (Math.random() < 0.5 ? '#ff0' : '#ff8')
+        : (Math.random() < 0.5 ? '#f80' : '#fb0'),
+      gravidade: 0.3
+    });
+  }
+}
+
+function criarParticulasDano(x, y) {
+  for (let i = 0; i < 6; i++) {
+    const angulo = (Math.random() * Math.PI) - Math.PI;
+    const velocidade = Math.random() * 4 + 2;
+    particulas.push({
+      x: x, y: y,
+      vx: Math.cos(angulo) * velocidade,
+      vy: Math.sin(angulo) * velocidade - 3,
+      tamanho: Math.random() * 4 + 2,
+      vida: 30, vidaMax: 30,
+      cor: Math.random() < 0.5 ? '#e94560' : '#c03050',
+      gravidade: 0.4
+    });
+  }
+}
+
+function criarParticulasPulo(x, y) {
+  for (let i = 0; i < 8; i++) {
+    particulas.push({
+      x: x, y: y,
+      vx: (Math.random() - 0.5) * 4,
+      vy: -Math.random() * 2 - 1,
+      tamanho: Math.random() * 6 + 3,
+      vida: 20, vidaMax: 20,
+      cor: Math.random() < 0.5 ? '#888' : '#aaa',
+      gravidade: -0.05
+    });
+  }
+}
+
+function criarParticulasAndar(x, y, correndo) {
+  if (Math.random() > 0.4) return;
+  const quantidade = correndo ? 2 : 1;
+  for (let i = 0; i < quantidade; i++) {
+    particulas.push({
+      x: x + (Math.random() - 0.5) * 30,
+      y: y,
+      vx: (Math.random() - 0.5) * 2 - (correndo ? 2 : 1),
+      vy: -Math.random() * 1.5,
+      tamanho: Math.random() * 5 + 2,
+      vida: 18, vidaMax: 18,
+      cor: '#777',
+      gravidade: -0.05
+    });
+  }
+}
+
+// ============================================================
+// CLASSE INIMIGO
+// ============================================================
+class Inimigo {
+  constructor(x, y, config) {
+    this.x = x; this.y = y;
+    this.w = config.w; this.h = config.h;
+    this.hp = config.hp; this.maxHp = config.hp;
+    this.vx = config.vxInicial;
+    this.minX = config.minX; this.maxX = config.maxX;
+    this.anims = config.anims;
+    this.ehChefe = config.ehChefe || false;
+    this.xpDrop = config.xpDrop || 10;
+    this.podePular = config.podePular || false;
+    this.vy = 0;
+    this.onGround = true;
+    this.facing = 1;
+    this.alive = true;
+    this.hitTimer = 0;
+    this.deathTimer = 0;
+    this.animAtual = 'walk';
+    this.frameAtual = 0;
+    this.frameTimer = 0;
+
+    this.velocidade = config.velocidade || Math.abs(config.vxInicial) || 1.5;
+    this.raioDeteccao = this.ehChefe ? 1400 : 1200;
+    this.raioAtaque = this.ehChefe ? 280 : 200;
+    this.atacando = false;
+    this.atkTimer = 0;
+    this.atkCooldown = 0;
+    this.atkDuracao = 0;
+    this.atkDano = config.dano || 8;
+    this.atkAlcance = this.ehChefe ? 220 : 150;
+    this.atkFramesAtivos = this.ehChefe ? [6, 7, 8, 9, 10] : [4, 5, 6, 7];
+    this.tipoAtk = 'attack';
+    this.estado = 'patrulha';
+    this.puloCooldown = 0;
+
+    let tipoSom = 'gorgon';
+    if (config.anims === yokai1Anims || config.anims === yokai2Anims) tipoSom = 'yokai';
+    if (config.anims === chefeYokaiAnims) tipoSom = 'chefe';
+    if (this.ehChefe && config.anims === gorgonChefeAnims) tipoSom = 'chefe';
+    this.tipoSom = tipoSom;
+  }
+
+  update(player) {
+    if (!this.alive) {
+      this.trocarAnim('death');
+      this.deathTimer++;
+      const anim = this.anims.death;
+      this.frameTimer++;
+      if (this.frameTimer >= anim.velocidade) {
+        this.frameTimer = 0;
+        if (this.frameAtual < anim.frames - 1) this.frameAtual++;
+      }
+      if (this.deathTimer > 60) return 'remover';
+      return;
+    }
+
+    if (this.hitTimer > 0) {
+      this.hitTimer--;
+      this.trocarAnim('hurt');
+      const anim = this.anims.hurt;
+      this.frameTimer++;
+      if (this.frameTimer >= anim.velocidade) {
+        this.frameTimer = 0;
+        if (this.frameAtual < anim.frames - 1) this.frameAtual++;
+      }
+      return;
+    }
+
+    if (this.podePular) {
+      this.vy += 0.9;
+      this.y += this.vy;
+      if (this.y + this.h >= ALTURA_CHAO) {
+        this.y = ALTURA_CHAO - this.h;
+        this.vy = 0;
+        this.onGround = true;
+      } else {
+        this.onGround = false;
+      }
+    }
+
+    if (this.atkCooldown > 0) this.atkCooldown--;
+    if (this.puloCooldown > 0) this.puloCooldown--;
+
+    if (this.atacando) {
+      this.trocarAnim(this.tipoAtk);
+      this.atkTimer--;
+      const anim = this.anims[this.tipoAtk];
+      this.frameTimer++;
+      if (this.frameTimer >= anim.velocidade) {
+        this.frameTimer = 0;
+        if (this.frameAtual < anim.frames - 1) this.frameAtual++;
+      }
+      if (this.atkTimer <= 0) {
+        this.atacando = false;
+        this.atkCooldown = this.ehChefe ? 40 : 60;
+        this.estado = 'perseguindo';
+      }
+      return;
+    }
+
+    const distX = (player.x + player.w / 2) - (this.x + this.w / 2);
+    const distAbs = Math.abs(distX);
+    const playerVivo = !player.morrendo && player.hp > 0;
+
+    if (playerVivo && distAbs < this.raioDeteccao) {
+      this.facing = distX > 0 ? 1 : -1;
+
+      if (distAbs < this.raioAtaque && this.atkCooldown === 0 && player.onGround) {
+        const ataques = ['attack'];
+        if (this.anims.attack_2) ataques.push('attack_2');
+        if (this.anims.attack_3) ataques.push('attack_3');
+        this.tipoAtk = ataques[Math.floor(Math.random() * ataques.length)];
+
+        this.atacando = true;
+        this.atkTimer = this.anims[this.tipoAtk].frames * 3;
+        this.atkDuracao = this.atkTimer;
+        this.frameAtual = 0;
+        this.frameTimer = 0;
+        this.estado = 'atacando';
+
+        tocarSom(this.tipoSom + '_ataque');
+        return;
+      }
+
+      this.estado = 'perseguindo';
+      const alvo = player.x + player.w / 2;
+      const meu = this.x + this.w / 2;
+      const vel = this.velocidade * (this.ehChefe ? 1.4 : 1.2);
+
+      if (Math.abs(alvo - meu) > 30) {
+        this.x += (alvo > meu ? vel : -vel);
+      }
+
+      if (this.podePular && this.onGround && this.puloCooldown === 0 && player.y < this.y - 50) {
+        this.vy = -18;
+        this.onGround = false;
+        this.puloCooldown = 120;
+      }
+
+      this.trocarAnim('walk');
+      const anim = this.anims.walk;
+      this.frameTimer++;
+      if (this.frameTimer >= anim.velocidade) {
+        this.frameTimer = 0;
+        this.frameAtual = (this.frameAtual + 1) % anim.frames;
+      }
+      return;
+    }
+
+    this.estado = 'patrulha';
+    this.x += this.vx;
+    if (this.x < this.minX || this.x + this.w > this.maxX) this.vx *= -1;
+    this.facing = this.vx > 0 ? 1 : -1;
+    this.trocarAnim('walk');
+    const anim = this.anims.walk;
+    this.frameTimer++;
+    if (this.frameTimer >= anim.velocidade) {
+      this.frameTimer = 0;
+      this.frameAtual = (this.frameAtual + 1) % anim.frames;
+    }
+  }
+
+  getHitboxAtaque() {
+    if (!this.atacando) return null;
+    if (!this.atkFramesAtivos.includes(this.frameAtual)) return null;
+    return {
+      x: this.facing > 0 ? this.x + this.w - 30 : this.x - this.atkAlcance + 30,
+      y: this.y + 60,
+      w: this.atkAlcance,
+      h: 140
+    };
+  }
+
+  trocarAnim(nome) {
+    if (this.animAtual === nome) return;
+    this.animAtual = nome;
+    this.frameAtual = 0;
+    this.frameTimer = 0;
+  }
+
+  levarDano(qtd, critico) {
+    if (!this.alive) return;
+    this.hp -= qtd;
+    this.hitTimer = 15;
+    this.trocarAnim('hurt');
+    tocarSom(this.tipoSom + '_dano');
+    numerosFlutuantes.push({
+      x: this.x + this.w / 2, y: this.y,
+      texto: (critico ? 'CRIT ' : '') + qtd,
+      cor: critico ? '#ff0' : '#fff', timer: 60
+    });
+    if (this.hp <= 0) {
+      this.hp = 0;
+      this.alive = false;
+      this.deathTimer = 0;
+      this.trocarAnim('death');
+      tocarSom(this.tipoSom + '_morte');
+      aoMatarInimigo(this);
+    }
+  }
+
+  draw() {
+    const anim = this.anims[this.animAtual];
+    if (!anim || !anim.img.complete || anim.img.naturalWidth === 0) return;
+
+    const sombraX = this.x - camera.x + this.w / 2;
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+    ctx.beginPath();
+    ctx.ellipse(sombraX, ALTURA_CHAO - 6, this.w / 9, 5, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    const sx = this.frameAtual * anim.frameW;
+    ctx.save();
+    if (this.hitTimer > 0 && Math.floor(this.hitTimer / 3) % 2 === 0) ctx.globalAlpha = 0.6;
+    if (this.facing < 0) {
+      ctx.translate(this.x - camera.x + this.w, this.y);
+      ctx.scale(-1, 1);
+      ctx.drawImage(anim.img, sx, 0, anim.frameW, anim.frameH, 0, 0, this.w, this.h);
+    } else {
+      ctx.drawImage(anim.img, sx, 0, anim.frameW, anim.frameH, this.x - camera.x, this.y, this.w, this.h);
+    }
+    ctx.restore();
+
+    if (this.alive && this.hp < this.maxHp) {
+      const hpPct = this.hp / this.maxHp;
+      const w = this.ehChefe ? 200 : 100;
+      ctx.fillStyle = '#000';
+      ctx.fillRect(this.x - camera.x + this.w / 2 - w / 2, this.y - 14, w, 8);
+      ctx.fillStyle = this.ehChefe ? '#f0f' : '#e94560';
+      ctx.fillRect(this.x - camera.x + this.w / 2 - w / 2, this.y - 14, w * hpPct, 8);
+    }
+  }
+}
+
+// ============================================================
+// FASE 1 — 40 gorgons + chefe
+// ============================================================
+function criarInimigosFase1() {
+  inimigos = [];
+
+  for (let i = 0; i < 13; i++) {
+    const x = 400 + i * 170;
+    inimigos.push(new Inimigo(x, ALTURA_CHAO - 256, {
+      w: 256, h: 256, hp: 80, vxInicial: i % 2 === 0 ? 1.5 : -1.8,
+      minX: x - 150, maxX: x + 150, anims: gorgonNormalAnims, xpDrop: 20, dano: 8
+    }));
+  }
+  for (let i = 0; i < 13; i++) {
+    const x = 2600 + i * 190;
+    inimigos.push(new Inimigo(x, ALTURA_CHAO - 256, {
+      w: 256, h: 256, hp: 110, vxInicial: i % 2 === 0 ? 1.7 : -2.0,
+      minX: x - 150, maxX: x + 150, anims: gorgonNormalAnims, xpDrop: 30, dano: 11
+    }));
+  }
+  for (let i = 0; i < 6; i++) {
+    const x = 5100 + i * 300;
+    inimigos.push(new Inimigo(x, ALTURA_CHAO - 256, {
+      w: 256, h: 256, hp: 140, vxInicial: i % 2 === 0 ? 1.9 : -2.2,
+      minX: x - 150, maxX: x + 150, anims: gorgonNormalAnims, xpDrop: 40, dano: 14
+    }));
+  }
+  for (let i = 0; i < 2; i++) {
+    inimigos.push(new Inimigo(6300 + i * 80, ALTURA_CHAO - 256, {
+      w: 256, h: 256, hp: 140, vxInicial: i === 0 ? 1.9 : -1.9,
+      minX: 6200, maxX: 6500, anims: gorgonNormalAnims, xpDrop: 40, dano: 14
+    }));
+  }
+  for (let i = 0; i < 2; i++) {
+    inimigos.push(new Inimigo(6800 + i * 80, ALTURA_CHAO - 256, {
+      w: 256, h: 256, hp: 140, vxInicial: i === 0 ? 1.9 : -1.9,
+      minX: 6700, maxX: 7000, anims: gorgonNormalAnims, xpDrop: 40, dano: 14
+    }));
+  }
+  for (let i = 0; i < 4; i++) {
+    const x = 7100 + i * 90;
+    inimigos.push(new Inimigo(x, ALTURA_CHAO - 256, {
+      w: 256, h: 256, hp: 180, vxInicial: i % 2 === 0 ? 2.0 : -2.0,
+      minX: 7050, maxX: 7450, anims: gorgonNormalAnims, xpDrop: 60, dano: 16
+    }));
+  }
+
+  inimigos.push(new Inimigo(7480, ALTURA_CHAO - 384, {
+    w: 384, h: 384, hp: 500, vxInicial: -1.5,
+    minX: 7450, maxX: 7680, anims: gorgonChefeAnims, xpDrop: 200,
+    ehChefe: true, dano: 20
+  }));
+}
+
+// ============================================================
+// FASE 2 — 80 mistos + chefe
+// ============================================================
+function criarInimigosFase2() {
+  inimigos = [];
+  const TAM = 256;
+
+  for (let i = 0; i < 8; i++) {
+    const x = 400 + i * 400;
+    inimigos.push(new Inimigo(x, ALTURA_CHAO - TAM, {
+      w: TAM, h: TAM, hp: 90, vxInicial: 1.5,
+      minX: x - 180, maxX: x + 180, anims: gorgonVerdeAnims, xpDrop: 25, dano: 7
+    }));
+  }
+  for (let i = 0; i < 8; i++) {
+    const x = 700 + i * 400;
+    inimigos.push(new Inimigo(x, ALTURA_CHAO - TAM, {
+      w: TAM, h: TAM, hp: 100, vxInicial: 1.6,
+      minX: x - 180, maxX: x + 180, anims: gorgonRoxoAnims, xpDrop: 30, dano: 8
+    }));
+  }
+  for (let i = 0; i < 8; i++) {
+    const x = 1000 + i * 320;
+    inimigos.push(new Inimigo(x, ALTURA_CHAO - TAM, {
+      w: TAM, h: TAM, hp: 120, vxInicial: 1.7,
+      minX: x - 180, maxX: x + 180, anims: gorgonPardoAnims, xpDrop: 35, dano: 9
+    }));
+  }
+  for (let i = 0; i < 14; i++) {
+    const x = 3700 + i * 240;
+    const tipo = i % 3 === 0 ? gorgonVerdeAnims : (i % 3 === 1 ? gorgonRoxoAnims : gorgonPardoAnims);
+    inimigos.push(new Inimigo(x, ALTURA_CHAO - TAM, {
+      w: TAM, h: TAM, hp: 160, vxInicial: 1.8,
+      minX: x - 180, maxX: x + 180, anims: tipo, xpDrop: 45, dano: 13
+    }));
+  }
+  for (let i = 0; i < 7; i++) {
+    const x = 4000 + i * 450;
+    inimigos.push(new Inimigo(x, ALTURA_CHAO - TAM, {
+      w: TAM, h: TAM, hp: 170, vxInicial: 2.0,
+      minX: x - 200, maxX: x + 200, anims: yokai1Anims, xpDrop: 50, dano: 14,
+      podePular: true
+    }));
+  }
+  for (let i = 0; i < 7; i++) {
+    const x = 4300 + i * 400;
+    inimigos.push(new Inimigo(x, ALTURA_CHAO - TAM, {
+      w: TAM, h: TAM, hp: 180, vxInicial: 2.1,
+      minX: x - 200, maxX: x + 200, anims: yokai2Anims, xpDrop: 55, dano: 15,
+      podePular: true
+    }));
+  }
+  for (let i = 0; i < 12; i++) {
+    const x = 7200 + i * 290;
+    const tipo = i % 3 === 0 ? gorgonVerdeAnims : (i % 3 === 1 ? gorgonRoxoAnims : gorgonPardoAnims);
+    inimigos.push(new Inimigo(x, ALTURA_CHAO - TAM, {
+      w: TAM, h: TAM, hp: 220, vxInicial: 2.0,
+      minX: x - 180, maxX: x + 180, anims: tipo, xpDrop: 60, dano: 17
+    }));
+  }
+  for (let i = 0; i < 12; i++) {
+    const x = 7500 + i * 260;
+    const tipo = i % 2 === 0 ? yokai1Anims : yokai2Anims;
+    inimigos.push(new Inimigo(x, ALTURA_CHAO - TAM, {
+      w: TAM, h: TAM, hp: 240, vxInicial: 2.2,
+      minX: x - 200, maxX: x + 200, anims: tipo, xpDrop: 70, dano: 18,
+      podePular: true
+    }));
+  }
+  for (let i = 0; i < 4; i++) {
+    const x = 10550 + i * 100;
+    const tipo = i % 2 === 0 ? yokai1Anims : yokai2Anims;
+    inimigos.push(new Inimigo(x, ALTURA_CHAO - TAM, {
+      w: TAM, h: TAM, hp: 300, vxInicial: i % 2 === 0 ? 2.3 : -2.3,
+      minX: 10500, maxX: 11000, anims: tipo, xpDrop: 100, dano: 20, podePular: true
+    }));
+  }
+
+  inimigos.push(new Inimigo(11200, ALTURA_CHAO - 384, {
+    w: 384, h: 384, hp: 1500, vxInicial: -1.5,
+    minX: 11000, maxX: 11520, anims: chefeYokaiAnims, xpDrop: 500,
+    ehChefe: true, dano: 25, podePular: true
+  }));
+}
+
+// ============================================================
+// FUNÇÃO GENÉRICA — cria inimigos mistos escalonados
+// ============================================================
+function criarInimigosMistos(quantidade, forcaMin, forcaMax, xInicio, xFim) {
+  const TAM = 256;
+
+  for (let i = 0; i < quantidade; i++) {
+    const progresso = i / quantidade;
+    const x = xInicio + progresso * (xFim - xInicio);
+    const forca = forcaMin + progresso * (forcaMax - forcaMin);
+
+    const tipoIdx = Math.floor(Math.random() * 5);
+    let anims, podePular = false, hpBase, danoBase;
+
+    if (tipoIdx === 0) { anims = gorgonNormalAnims; hpBase = 100; danoBase = 10; }
+    else if (tipoIdx === 1) { anims = gorgonVerdeAnims; hpBase = 110; danoBase = 11; }
+    else if (tipoIdx === 2) { anims = gorgonRoxoAnims; hpBase = 120; danoBase = 12; }
+    else if (tipoIdx === 3) { anims = gorgonPardoAnims; hpBase = 130; danoBase = 13; }
+    else { anims = (Math.random() < 0.5 ? yokai1Anims : yokai2Anims); hpBase = 140; danoBase = 14; podePular = true; }
+
+    inimigos.push(new Inimigo(x, ALTURA_CHAO - TAM, {
+      w: TAM, h: TAM,
+      hp: Math.floor(hpBase * forca),
+      vxInicial: (Math.random() < 0.5 ? 1.8 : -1.8) * forca * 0.7,
+      minX: Math.max(0, x - 200), maxX: Math.min(xFim, x + 200),
+      anims: anims,
+      xpDrop: Math.floor(30 * forca),
+      dano: Math.floor(danoBase * forca),
+      podePular: podePular
+    }));
+  }
+}
+
+// ============================================================
+// FASE 3 — 109 mistos + 2 chefes + 3 suporte
+// ============================================================
+function criarInimigosFase3() {
+  inimigos = [];
+  const TAM = 256;
+  const MUNDO = 11520;
+
+  criarInimigosMistos(109, 1, 3, 400, MUNDO - 1500);
+
+  for (let i = 0; i < 3; i++) {
+    const x = 10400 + i * 120;
+    const tipo = i === 0 ? yokai1Anims : (i === 1 ? gorgonChefeAnims : yokai2Anims);
+    inimigos.push(new Inimigo(x, ALTURA_CHAO - TAM, {
+      w: TAM, h: TAM, hp: 500, vxInicial: i % 2 === 0 ? 2.0 : -2.0,
+      minX: 10300, maxX: 10800, anims: tipo, xpDrop: 150, dano: 22,
+      podePular: i !== 1
+    }));
+  }
+
+  inimigos.push(new Inimigo(10950, ALTURA_CHAO - 384, {
+    w: 384, h: 384, hp: 1200, vxInicial: -1.5,
+    minX: 10800, maxX: 11100, anims: gorgonChefeAnims, xpDrop: 400,
+    ehChefe: true, dano: 25
+  }));
+  inimigos.push(new Inimigo(11150, ALTURA_CHAO - 384, {
+    w: 384, h: 384, hp: 1800, vxInicial: 1.5,
+    minX: 11000, maxX: 11400, anims: chefeYokaiAnims, xpDrop: 600,
+    ehChefe: true, dano: 28, podePular: true
+  }));
+}
+
+// ============================================================
+// FASE 4 — 169 mistos + 4 chefes (2 gorgon + 2 yokai)
+// ============================================================
+function criarInimigosFase4() {
+  inimigos = [];
+  const TAM = 256;
+  const MUNDO = 11520;
+
+  criarInimigosMistos(169, 1.5, 4, 400, MUNDO - 2000);
+
+  inimigos.push(new Inimigo(9900, ALTURA_CHAO - 384, {
+    w: 384, h: 384, hp: 1500, vxInicial: -1.5,
+    minX: 9700, maxX: 10200, anims: gorgonChefeAnims, xpDrop: 500,
+    ehChefe: true, dano: 25
+  }));
+  inimigos.push(new Inimigo(10300, ALTURA_CHAO - 384, {
+    w: 384, h: 384, hp: 2000, vxInicial: 1.5,
+    minX: 10100, maxX: 10600, anims: chefeYokaiAnims, xpDrop: 700,
+    ehChefe: true, dano: 28, podePular: true
+  }));
+  inimigos.push(new Inimigo(10800, ALTURA_CHAO - 384, {
+    w: 384, h: 384, hp: 1500, vxInicial: -1.5,
+    minX: 10600, maxX: 11100, anims: gorgonChefeAnims, xpDrop: 500,
+    ehChefe: true, dano: 25
+  }));
+  inimigos.push(new Inimigo(11200, ALTURA_CHAO - 384, {
+    w: 384, h: 384, hp: 2000, vxInicial: 1.5,
+    minX: 11000, maxX: 11450, anims: chefeYokaiAnims, xpDrop: 700,
+    ehChefe: true, dano: 28, podePular: true
+  }));
+}
+
+// ============================================================
+// FASE 5 — 200 mistos + 3 chefes (2 gorgon + 1 yokai)
+// ============================================================
+function criarInimigosFase5() {
+  inimigos = [];
+  const MUNDO = 11520;
+
+  criarInimigosMistos(200, 2, 5, 400, MUNDO - 2200);
+
+  // 3 chefes
+  inimigos.push(new Inimigo(9700, ALTURA_CHAO - 384, {
+    w: 384, h: 384, hp: 2200, vxInicial: -1.5,
+    minX: 9500, maxX: 10000, anims: gorgonChefeAnims, xpDrop: 700,
+    ehChefe: true, dano: 30
+  }));
+  inimigos.push(new Inimigo(10300, ALTURA_CHAO - 384, {
+    w: 384, h: 384, hp: 2500, vxInicial: 1.5,
+    minX: 10100, maxX: 10600, anims: chefeYokaiAnims, xpDrop: 900,
+    ehChefe: true, dano: 32, podePular: true
+  }));
+  inimigos.push(new Inimigo(11000, ALTURA_CHAO - 384, {
+    w: 384, h: 384, hp: 2200, vxInicial: -1.5,
+    minX: 10800, maxX: 11400, anims: gorgonChefeAnims, xpDrop: 700,
+    ehChefe: true, dano: 30
+  }));
+}
+
+// ============================================================
+// FASE 6 — 250 mistos + 4 chefes (2 gorgon + 2 yokai, BOSS FINAL)
+// ============================================================
+function criarInimigosFase6() {
+  inimigos = [];
+  const MUNDO = 11520;
+
+  criarInimigosMistos(250, 2.5, 6, 400, MUNDO - 2400);
+
+  // 4 chefes — BOSS FINAL
+  inimigos.push(new Inimigo(9200, ALTURA_CHAO - 384, {
+    w: 384, h: 384, hp: 3000, vxInicial: -1.5,
+    minX: 9000, maxX: 9500, anims: gorgonChefeAnims, xpDrop: 1000,
+    ehChefe: true, dano: 35
+  }));
+  inimigos.push(new Inimigo(9900, ALTURA_CHAO - 384, {
+    w: 384, h: 384, hp: 3500, vxInicial: 1.5,
+    minX: 9700, maxX: 10200, anims: chefeYokaiAnims, xpDrop: 1200,
+    ehChefe: true, dano: 38, podePular: true
+  }));
+  inimigos.push(new Inimigo(10600, ALTURA_CHAO - 384, {
+    w: 384, h: 384, hp: 3000, vxInicial: -1.5,
+    minX: 10400, maxX: 10900, anims: gorgonChefeAnims, xpDrop: 1000,
+    ehChefe: true, dano: 35
+  }));
+  inimigos.push(new Inimigo(11200, ALTURA_CHAO - 384, {
+    w: 384, h: 384, hp: 3500, vxInicial: 1.5,
+    minX: 11000, maxX: 11450, anims: chefeYokaiAnims, xpDrop: 1200,
+    ehChefe: true, dano: 38, podePular: true
+  }));
+}
+
+// ============================================================
+// CHAMADA GERAL
+// ============================================================
+function criarInimigos() {
+  if (faseAtual === 1)      { MUNDO_LARGURA = 7680;  criarInimigosFase1(); }
+  else if (faseAtual === 2) { MUNDO_LARGURA = 11520; criarInimigosFase2(); }
+  else if (faseAtual === 3) { MUNDO_LARGURA = 11520; criarInimigosFase3(); }
+  else if (faseAtual === 4) { MUNDO_LARGURA = 11520; criarInimigosFase4(); }
+  else if (faseAtual === 5) { MUNDO_LARGURA = 11520; criarInimigosFase5(); }
+  else if (faseAtual === 6) { MUNDO_LARGURA = 11520; criarInimigosFase6(); }
+}
+
+// ============================================================
+// ATAQUES
+// ============================================================
+const ATAQUES = {
+  attack:   { dano: 15, alcance: 80,  altura: 120, yOff: 60, duracao: 25, cooldown: 35, framesAtivos: [2, 3] },
+  attack_2: { dano: 25, alcance: 90,  altura: 130, yOff: 55, duracao: 22, cooldown: 40, framesAtivos: [1, 2] },
+  attack_3: { dano: 40, alcance: 110, altura: 140, yOff: 50, duracao: 30, cooldown: 55, framesAtivos: [1] }
+};
+
+// ============================================================
+// XP / LEVEL
+// ============================================================
+function ganharXP(qtd) {
+  player.xp += qtd;
+  numerosFlutuantes.push({
+    x: player.x + player.w / 2, y: player.y - 20,
+    texto: '+' + qtd + ' XP', cor: '#0f0', timer: 90
+  });
+  while (player.xp >= player.xpProximo) {
+    player.xp -= player.xpProximo;
+    player.nivel++;
+    player.xpProximo = Math.floor(player.xpProximo * 1.5);
+    player.pontosDisponiveis += 3;
+
+    if (player.nivel % 3 === 0) {
+      player.pontosStamina = (player.pontosStamina || 0) + 1;
+      mostrarMensagem('LEVEL UP! Nível ' + player.nivel + ' (+3 pts e +1 STAMINA)');
+    } else {
+      mostrarMensagem('LEVEL UP! Nível ' + player.nivel + ' (+3 pontos)');
+    }
+
+    player.hp = derivados().hpMax;
+    tocarSom('levelup');
+  }
+}
+
+function aoMatarInimigo(inimigo) {
+  ganharXP(inimigo.xpDrop);
+  const pontos = inimigo.ehChefe ? 5 : 1;
+  player.pontosDisponiveis += pontos;
+
+  if (inimigo.ehChefe) {
+    // Drop 1: épico do conjunto da fase
+    const itemEpico = gerarEpico();
+    player.inventario.push(itemEpico);
+    mostrarMensagem('Épico: ' + ITENS[itemEpico].nome + '!');
+
+    // Drop 2: item aleatório do chefe
+    const itemChefe = gerarItemChefe();
+    player.inventario.push(itemChefe);
+
+    // Verifica vitória da fase
+    const chefesVivos = inimigos.filter(e => e.ehChefe && e.alive).length;
+    if (chefesVivos === 0) {
+      if (timeoutVitoria) clearTimeout(timeoutVitoria);
+      pararMusica();
+
+      if (faseAtual === 1)      timeoutVitoria = setTimeout(() => { telaAtual = 'vitoria_fase1'; }, 1500);
+      else if (faseAtual === 2) timeoutVitoria = setTimeout(() => { telaAtual = 'vitoria_fase2'; }, 1500);
+      else if (faseAtual === 3) timeoutVitoria = setTimeout(() => { telaAtual = 'vitoria_fase3'; }, 1500);
+      else if (faseAtual === 4) timeoutVitoria = setTimeout(() => { telaAtual = 'vitoria_fase4'; }, 1500);
+      else if (faseAtual === 5) timeoutVitoria = setTimeout(() => { telaAtual = 'vitoria_fase5'; }, 1500);
+      else if (faseAtual === 6) timeoutVitoria = setTimeout(() => { telaAtual = 'jogo_completo'; }, 1500);
+    }
+  } else {
+    if (Math.random() < 0.15) {
+      const novoItem = gerarItemComum();
+      player.inventario.push(novoItem);
+      mostrarMensagem('Drop: ' + ITENS[novoItem].nome + '!');
+    } else {
+      mostrarMensagem('+' + pontos + ' ponto(s)!');
+    }
+  }
+}
+
+function mostrarMensagem(txt) {
+  mensagem.texto = txt;
+  mensagem.timer = 180;
+}
+
+// ============================================================
+// INVENTÁRIO — equipar / desequipar
+// ============================================================
+function equiparItem(id) {
+  const item = ITENS[id];
+  if (!item) return;
+
+  let slotAlvo = null;
+
+  if (item.tipo === 'arma') {
+    if (!player.equipados.arma_1) slotAlvo = 'arma_1';
+    else if (!player.equipados.arma_2) slotAlvo = 'arma_2';
+    else slotAlvo = 'arma_1';
+  } else if (item.tipo === 'anel') {
+    if (!player.equipados.anel_1) slotAlvo = 'anel_1';
+    else if (!player.equipados.anel_2) slotAlvo = 'anel_2';
+    else slotAlvo = 'anel_1';
+  } else {
+    slotAlvo = item.tipo;
+  }
+
+  const anterior = player.equipados[slotAlvo];
+  if (anterior) player.inventario.push(anterior);
+
+  const idx = player.inventario.indexOf(id);
+  if (idx >= 0) player.inventario.splice(idx, 1);
+  player.equipados[slotAlvo] = id;
+  mostrarMensagem('Equipado: ' + item.nome);
+}
+
+function desequiparItem(slot) {
+  const id = player.equipados[slot];
+  if (!id) return;
+  player.inventario.push(id);
+  player.equipados[slot] = null;
+  mostrarMensagem('Desequipado');
+}
+
+function gastarPonto(atributo) {
+  if (atributo === 'stamina') {
+    if ((player.pontosStamina || 0) <= 0) {
+      mostrarMensagem('Sem pontos de STAMINA! (+1 a cada 3 níveis)');
+      return;
+    }
+    player.pontosStamina--;
+    player.atributos.stamina++;
+    player.stamina += 5;
+    return;
+  }
+  if (player.pontosDisponiveis <= 0) return;
+  player.atributos[atributo]++;
+  player.pontosDisponiveis--;
+  if (atributo === 'vitalidade') player.hp += 10;
+}
+
+function apagarItem(idx) {
+  if (idx < 0 || idx >= player.inventario.length) return;
+  const id = player.inventario[idx];
+  const item = ITENS[id];
+  player.inventario.splice(idx, 1);
+  mostrarMensagem('Item removido: ' + (item ? item.nome : '?'));
+}
+
+// ============================================================
+// SAVE / LOAD
+// ============================================================
+function salvarFasesLiberadas() {
+  localStorage.setItem('beyondtime_fases', fasesLiberadas.toString());
+}
+
+function salvarJogo() {
+  const dados = {
+    nivel: player.nivel, xp: player.xp, xpProximo: player.xpProximo,
+    pontosDisponiveis: player.pontosDisponiveis,
+    pontosStamina: player.pontosStamina || 0,
+    stamina: player.stamina,
+    atributos: { ...player.atributos },
+    inventario: [...player.inventario],
+    equipados: { ...player.equipados },
+    hp: player.hp, x: player.x, y: player.y,
+    fase: faseAtual,
+    data: Date.now()
+  };
+  localStorage.setItem('beyondtime_save', JSON.stringify(dados));
+  temSave = true;
+  mostrarMensagem('Jogo salvo!');
+}
+
+function carregarJogo() {
+  const raw = localStorage.getItem('beyondtime_save');
+  if (!raw) { mostrarMensagem('Nenhum save encontrado'); return false; }
+  try {
+    const dados = JSON.parse(raw);
+    resetarPlayer();
+    player.nivel = dados.nivel;
+    player.xp = dados.xp;
+    player.xpProximo = dados.xpProximo;
+    player.pontosDisponiveis = dados.pontosDisponiveis;
+    player.pontosStamina = dados.pontosStamina || 0;
+    player.stamina = dados.stamina || 100;
+    player.atributos = dados.atributos;
+    player.inventario = dados.inventario;
+    player.equipados = dados.equipados;
+    player.hp = dados.hp;
+    player.x = dados.x;
+    player.y = dados.y;
+    faseAtual = dados.fase || 1;
+    criarInimigos();
+    tocarMusica('fase' + Math.min(6, Math.max(1, faseAtual)));
+    mostrarMensagem('Jogo carregado!');
+    return true;
+  } catch (e) {
+    console.error(e);
+    mostrarMensagem('Erro ao carregar');
+    return false;
+  }
+}
+
+function novoJogo() {
+  faseAtual = 1;
+  resetarPlayer();
+  criarInimigos();
+  camera.x = 0;
+  telaAtual = 'jogo';
+  tocarMusica('fase1');
+}
+
+function iniciarFase(numero) {
+  if (numero > fasesLiberadas) return;
+  faseAtual = numero;
+  resetarPlayer();
+  criarInimigos();
+  camera.x = 0;
+  telaAtual = 'jogo';
+  tocarMusica('fase' + numero);
+}
+
+function proximaFase() {
+  const proxima = faseAtual + 1;
+  if (proxima > 6) return;
+
+  // Libera a próxima
+  if (proxima > fasesLiberadas) {
+    fasesLiberadas = proxima;
+    salvarFasesLiberadas();
+  }
+
+  faseAtual = proxima;
+  tocarMusica('fase' + faseAtual);
+  player.x = 100;
+  player.y = ALTURA_CHAO - PLAYER_TAM;
+  player.hp = derivados().hpMax;
+  player.animAtual = 'idle';
+  player.frameAtual = 0;
+  player.frameTimer = 0;
+  player.atacando = false;
+  player.defendendo = false;
+  player.morrendo = false;
+  criarInimigos();
+  camera.x = 0;
+  telaAtual = 'jogo';
+}
+
+// ============================================================
+// FIM DA PARTE 2 — CONTINUA NA PARTE 3
+// ============================================================
+// ============================================================
+// HUD — CLIQUE E POPUP
+// ============================================================
+const HUD_ICONES = [
+  { id: 'save', x: 0, y: 0, tam: 32, hover: false },
+  { id: 'load', x: 0, y: 0, tam: 32, hover: false },
+  { id: 'menu', x: 0, y: 0, tam: 32, hover: false }
+];
+
+function tratarCliqueHUD() {
+  if (!mouse.clicou) return false;
+  for (const icone of HUD_ICONES) {
+    if (mouse.x >= icone.x && mouse.x <= icone.x + icone.tam &&
+        mouse.y >= icone.y && mouse.y <= icone.y + icone.tam) {
+      if (icone.id === 'save') { salvarJogo(); mouse.clicou = false; return true; }
+      if (icone.id === 'load') {
+        if (temSave) popupAtivo = 'load';
+        else mostrarMensagem('Nenhum save encontrado');
+        mouse.clicou = false; return true;
+      }
+      if (icone.id === 'menu') { popupAtivo = 'menu'; mouse.clicou = false; return true; }
+    }
+  }
+  return false;
+}
+
+function tratarPopup() {
+  if (!popupAtivo) return false;
+  const btnSim = { x: LARGURA / 2 - 220, y: 400, w: 200, h: 60 };
+  const btnNao = { x: LARGURA / 2 + 20,  y: 400, w: 200, h: 60 };
+
+  if (mouse.clicou) {
+    if (mouse.x >= btnSim.x && mouse.x <= btnSim.x + btnSim.w &&
+        mouse.y >= btnSim.y && mouse.y <= btnSim.y + btnSim.h) {
+      if (popupAtivo === 'load') {
+        if (carregarJogo()) { popupAtivo = null; mouse.clicou = false; return false; }
+      } else if (popupAtivo === 'menu') {
+        popupAtivo = null;
+limparEstadoDeJogo();
+telaAtual = 'menu';
+mouse.clicou = false;
+return true;
+      }
+    }
+    if (mouse.x >= btnNao.x && mouse.x <= btnNao.x + btnNao.w &&
+        mouse.y >= btnNao.y && mouse.y <= btnNao.y + btnNao.h) {
+      popupAtivo = null; mouse.clicou = false;
+    }
+  }
+  if (keysPress['Escape']) { popupAtivo = null; keysPress = {}; }
+  return false;
+}
+
+// ============================================================
+// CONTROLE DE VOLUME
+// ============================================================
+function getVolumeLayout() {
+  const controlesX = 10;
+  const controlesLargura = LARGURA - 20;
+  const iconesReserva = 32 * 3 + 8 * 2 + 20;
+  const baseDireita = controlesX + controlesLargura - iconesReserva;
+
+  const sfxIconeX = baseDireita - 500;
+  const musIconeX = baseDireita - 250;
+
+  return {
+    sfx: {
+      iconeX: sfxIconeX, iconeY: 18, iconeTam: 32,
+      sliderX: sfxIconeX + 40, sliderY: 27, sliderW: 150, sliderH: 14
+    },
+    musica: {
+      iconeX: musIconeX, iconeY: 18, iconeTam: 32,
+      sliderX: musIconeX + 40, sliderY: 27, sliderW: 150, sliderH: 14
+    }
+  };
+}
+
+function tratarVolume() {
+  const L = getVolumeLayout();
+
+  const hoverSFXIcone = mouse.x >= L.sfx.iconeX && mouse.x <= L.sfx.iconeX + L.sfx.iconeTam &&
+                        mouse.y >= L.sfx.iconeY && mouse.y <= L.sfx.iconeY + L.sfx.iconeTam;
+  if (mouse.clicou && hoverSFXIcone) {
+    volumeSFX = volumeSFX > 0 ? 0 : 0.7;
+    aplicarVolume();
+    mouse.clicou = false;
+    return;
+  }
+
+  const hoverMusIcone = mouse.x >= L.musica.iconeX && mouse.x <= L.musica.iconeX + L.musica.iconeTam &&
+                        mouse.y >= L.musica.iconeY && mouse.y <= L.musica.iconeY + L.musica.iconeTam;
+  if (mouse.clicou && hoverMusIcone) {
+    volumeMusica = volumeMusica > 0 ? 0 : 0.5;
+    aplicarVolume();
+    mouse.clicou = false;
+    return;
+  }
+
+  const hoverSFXSlider = mouse.x >= L.sfx.sliderX && mouse.x <= L.sfx.sliderX + L.sfx.sliderW &&
+                         mouse.y >= L.sfx.sliderY - 6 && mouse.y <= L.sfx.sliderY + L.sfx.sliderH + 6;
+  if (mouse.clicou && hoverSFXSlider) {
+    volumeSFX = Math.max(0, Math.min(1, (mouse.x - L.sfx.sliderX) / L.sfx.sliderW));
+    aplicarVolume();
+    sliderArrastando = 'sfx';
+    mouse.clicou = false;
+  }
+
+  const hoverMusSlider = mouse.x >= L.musica.sliderX && mouse.x <= L.musica.sliderX + L.musica.sliderW &&
+                         mouse.y >= L.musica.sliderY - 6 && mouse.y <= L.musica.sliderY + L.musica.sliderH + 6;
+  if (mouse.clicou && hoverMusSlider) {
+    volumeMusica = Math.max(0, Math.min(1, (mouse.x - L.musica.sliderX) / L.musica.sliderW));
+    aplicarVolume();
+    sliderArrastando = 'musica';
+    mouse.clicou = false;
+  }
+
+  if (sliderArrastando === 'sfx' && mouse.pressionado) {
+    volumeSFX = Math.max(0, Math.min(1, (mouse.x - L.sfx.sliderX) / L.sfx.sliderW));
+    aplicarVolume();
+  }
+  if (sliderArrastando === 'musica' && mouse.pressionado) {
+    volumeMusica = Math.max(0, Math.min(1, (mouse.x - L.musica.sliderX) / L.musica.sliderW));
+    aplicarVolume();
+  }
+  if (!mouse.pressionado) sliderArrastando = null;
+}
+function limparEstadoDeJogo() {
+  inimigos = [];
+  numerosFlutuantes.length = 0;
+  particulas.length = 0;
+  camera.x = 0;
+  mensagem.texto = '';
+  mensagem.timer = 0;
+
+  // Reset de estados do player
+  player.atacando = false;
+  player.defendendo = false;
+  player.morrendo = false;
+  player.morteTimer = 0;
+  player.stunTimer = 0;
+  player.emStun = false;
+  player.invuln = 0;
+  player.vx = 0;
+  player.vy = 0;
+  player.correndo = false;
+  player.animAtual = 'idle';
+  player.frameAtual = 0;
+  player.frameTimer = 0;
+  player.regenTimer = 0;
+  player.regenerando = false;
+  player.somPassoTimer = 0;
+  player.staminaTimer = 0;
+
+  itemArrastando = null;
+  popupAtivo = null;
+  inventarioAberto = false;
+  atributosAberto = false;
+}
+// ============================================================
+// UPDATE PRINCIPAL
+// ============================================================
+function update() {
+  // ===== MENU =====
+   if (telaAtual === 'menu') {
+    pararMusica();
+    if (mouse.clicou) {
+      const btnW = 260;
+      const btnH = 56;
+      const btnX = (LARGURA - btnW) / 2;
+      const btnStartY = 340;
+      const btnGap = 20;
+
+      // NEW GAME
+      if (mouse.x > btnX && mouse.x < btnX + btnW &&
+          mouse.y > btnStartY && mouse.y < btnStartY + btnH) {
+        novoJogo();
+      }
+      // CONTINUE
+      const continueY = btnStartY + btnH + btnGap;
+      if (temSave && mouse.x > btnX && mouse.x < btnX + btnW &&
+          mouse.y > continueY && mouse.y < continueY + btnH) {
+        if (carregarJogo()) telaAtual = 'jogo';
+      }
+
+      // Seletor de fases — mesmas coordenadas do drawMenu
+      const ultimoBotaoY = continueY + btnH;
+      const rotuloY = ultimoBotaoY + 45;
+      const fTam = 62;
+      const fGap = 20;
+      const fTotalLargura = fTam * 3 + fGap * 2;
+      const fInicioX = (LARGURA - fTotalLargura) / 2;
+      const fInicioY = rotuloY + 30;
+
+      for (let i = 1; i <= 6; i++) {
+        const idx = i - 1;
+        const col = idx % 3;
+        const row = Math.floor(idx / 3);
+        const bx = fInicioX + col * (fTam + fGap);
+        const by = fInicioY + row * (fTam + fGap);
+        if (mouse.x >= bx && mouse.x <= bx + fTam &&
+            mouse.y >= by && mouse.y <= by + fTam) {
+          if (i <= fasesLiberadas) iniciarFase(i);
+          else mostrarMensagem('Fase ' + i + ' bloqueada!');
+        }
+      }
+      mouse.clicou = false;
+    }
+    keysPress = {};
+    return;
+  }
+
+    // ===== JOGO COMPLETO =====
+  if (telaAtual === 'jogo_completo') {
+    if (mouse.clicou) {
+      if (mouse.x > 540 && mouse.x < 740 && mouse.y > 460 && mouse.y < 510) {
+        if (timeoutVitoria) { clearTimeout(timeoutVitoria); timeoutVitoria = null; }
+        // Limpa tudo
+        limparEstadoDeJogo();
+        telaAtual = 'menu';
+      }
+      mouse.clicou = false;
+    }
+    keysPress = {};
+    return;
+  }
+
+  // ===== GAME OVER =====
+  if (telaAtual === 'gameover') {
+    if (keys['r'] || keys['R']) {
+      if (timeoutVitoria) { clearTimeout(timeoutVitoria); timeoutVitoria = null; }
+      iniciarFase(faseAtual);
+    }
+  if (keys['Escape']) {
+      if (timeoutVitoria) { clearTimeout(timeoutVitoria); timeoutVitoria = null; }
+      limparEstadoDeJogo();
+      telaAtual = 'menu';
+    }
+    keysPress = {};
+    return;
+  }
+
+  // ===== PAUSA =====
+  if (telaAtual === 'pausa') {
+    if (keysPress['Escape']) telaAtual = 'jogo';
+    if (mouse.clicou) {
+      if (mouse.x > 540 && mouse.x < 740 && mouse.y > 280 && mouse.y < 330) telaAtual = 'jogo';
+      if (mouse.x > 540 && mouse.x < 740 && mouse.y > 350 && mouse.y < 400) salvarJogo();
+      if (mouse.x > 540 && mouse.x < 740 && mouse.y > 420 && mouse.y < 470) {
+        if (carregarJogo()) telaAtual = 'jogo';
+      }
+     if (mouse.x > 540 && mouse.x < 740 && mouse.y > 490 && mouse.y < 540) {
+        limparEstadoDeJogo();
+        telaAtual = 'menu';
+      }
+      mouse.clicou = false;
+    }
+    keysPress = {};
+    return;
+  }
+
+  // ===== JOGO =====
+  if (popupAtivo) {
+    tratarPopup(); keysPress = {}; mouse.clicou = false; return;
+  }
+  if (tratarCliqueHUD()) { keysPress = {}; return; }
+  tratarVolume();
+  if (keysPress['Escape']) { telaAtual = 'pausa'; keysPress = {}; return; }
+  if (keysPress['i'] || keysPress['I']) {
+    inventarioAberto = !inventarioAberto;
+    atributosAberto = false;
+    itemArrastando = null;
+  }
+  if (keysPress['p'] || keysPress['P']) {
+    atributosAberto = !atributosAberto;
+    inventarioAberto = false;
+  }
+
+  if (inventarioAberto) {
+    tratarInventario();
+    keysPress = {};
+    mouse.clicou = false;
+    return;
+  }
+  if (atributosAberto) {
+    tratarAtributos();
+    keysPress = {};
+    mouse.clicou = false;
+    return;
+  }
+
+  HUD_ICONES.forEach(icone => {
+    icone.hover = mouse.x >= icone.x && mouse.x <= icone.x + icone.tam &&
+                  mouse.y >= icone.y && mouse.y <= icone.y + icone.tam;
+  });
+
+  // ===== MORTE =====
+  if (player.morrendo) {
+    player.morteTimer++;
+    player.animAtual = 'death';
+    const anim = playerAnims.death;
+    player.frameTimer++;
+    if (player.frameTimer >= anim.velocidade) {
+      player.frameTimer = 0;
+      if (player.frameAtual < anim.frames - 1) player.frameAtual++;
+    }
+    if (player.morteTimer > 90) telaAtual = 'gameover';
+    keysPress = {}; mouse.clicou = false;
+    return;
+  }
+
+  // ===== STUN =====
+  if (player.stunTimer > 0) {
+    player.stunTimer--;
+    player.animAtual = 'hurt';
+    player.frameTimer++;
+
+    const anim = playerAnims.hurt;
+    if (player.frameTimer >= anim.velocidade) {
+      player.frameTimer = 0;
+      if (player.frameAtual < anim.frames - 1) player.frameAtual++;
+    }
+
+    player.vy += 0.9;
+    player.y += player.vy;
+    if (player.y + player.h >= ground.y) {
+      player.y = ground.y - player.h;
+      player.vy = 0;
+      player.onGround = true;
+    }
+    player.x += player.vx;
+
+    if (player.x < 0) player.x = 0;
+    if (player.x + player.w > MUNDO_LARGURA) player.x = MUNDO_LARGURA - player.w;
+
+    player.emStun = true;
+  } else {
+    player.emStun = false;
+  }
+
+  const d = derivados();
+
+  // ===== REGENERAÇÃO HP =====
+  const parado = player.vx === 0 && player.onGround && !player.atacando && !player.defendendo;
+  const nesseInstante = player.invuln > 0;
+  if (nesseInstante) player.tempoSemDano = 0; else player.tempoSemDano++;
+  if (parado) player.tempoSemMexer++; else player.tempoSemMexer = 0;
+
+  const framesEspera = 180;
+  if (parado && player.tempoSemMexer > framesEspera && player.hp < d.hpMax && !player.morrendo) {
+    player.hp = Math.min(d.hpMax, player.hp + 10 / 60);
+    player.regenerando = true;
+    player.regenTimer = (player.regenTimer || 0) + 1;
+    if (player.regenTimer >= 30) {
+      player.regenTimer = 0;
+      numerosFlutuantes.push({
+        x: player.x + player.w / 2 + (Math.random() * 40 - 20),
+        y: player.y + 40, texto: '+5', cor: '#0f0', timer: 60
+      });
+      tocarSom('cura');
+    }
+  } else {
+    player.regenerando = false;
+    player.regenTimer = 0;
+  }
+
+  // ===== REGENERAÇÃO STAMINA =====
+  player.staminaTimer++;
+  if (parado && player.staminaTimer > 180 && player.stamina < d.staminaMax && !player.morrendo) {
+    player.stamina = Math.min(d.staminaMax, player.stamina + 20 / 60);
+  }
+
+  // ===== ESCUDO =====
+  const estavaDefendendo = player.defendendo;
+  player.defendendo = (keys['q'] || keys['Q']) && player.onGround && !player.atacando;
+  if (player.defendendo && !estavaDefendendo) {
+    tocarSom('defesa');
+  }
+
+  if (player.defendendo) {
+    player.vx = 0;
+    player.animAtual = 'shield';
+    player.frameTimer++;
+    const anim = playerAnims.shield;
+    if (player.frameTimer >= anim.velocidade) {
+      player.frameTimer = 0;
+      player.frameAtual = (player.frameAtual + 1) % anim.frames;
+    }
+  } else if (!player.emStun) {
+    player.correndo = keys['Shift'];
+    const velAtual = player.correndo ? d.velocidadeCorrida : d.velocidade;
+    player.vx = 0;
+    if (!player.atacando) {
+      if (keys['ArrowLeft'] || keys['a'] || keys['A']) { player.vx = -velAtual; player.facing = -1; }
+      if (keys['ArrowRight'] || keys['d'] || keys['D']) { player.vx = velAtual; player.facing = 1; }
+    }
+    if ((keys[' '] || keys['ArrowUp'] || keys['w'] || keys['W']) && player.onGround && !player.atacando) {
+      player.vy = player.jumpForce;
+      player.onGround = false;
+      tocarSom('pulo');
+      criarParticulasPulo(player.x + player.w / 2, ALTURA_CHAO - 5);
+    }
+  }
+
+  player.vy += 0.9;
+  player.x += player.vx;
+  player.y += player.vy;
+
+  if (player.y + player.h >= ground.y) {
+    if (player.estavaNoAr && player.vy > 8) tocarSom('aterrissar');
+    player.estavaNoAr = false;
+    player.y = ground.y - player.h;
+    player.vy = 0;
+    player.onGround = true;
+  } else {
+    player.estavaNoAr = true;
+  }
+
+  if (player.x < 0) player.x = 0;
+  if (player.x + player.w > MUNDO_LARGURA) player.x = MUNDO_LARGURA - player.w;
+
+  // ===== ATAQUES — início =====
+  if (player.atkCooldown > 0) player.atkCooldown--;
+  if (!player.defendendo && !player.atacando && player.atkCooldown === 0 && !player.emStun) {
+    let atkNome = null;
+    if (keysPress['z'] || keysPress['Z']) atkNome = 'attack';
+    else if (keysPress['x'] || keysPress['X']) atkNome = 'attack_2';
+    else if (keysPress['c'] || keysPress['C']) atkNome = 'attack_3';
+    if (atkNome) {
+      let custoStamina = 0;
+      if (atkNome === 'attack_2') custoStamina = 20;
+      if (atkNome === 'attack_3') custoStamina = 25;
+
+      if (player.stamina >= custoStamina) {
+        player.atacando = true;
+        player.atkAtual = atkNome;
+        player.atkTimer = ATAQUES[atkNome].duracao;
+        player.atkCooldown = ATAQUES[atkNome].cooldown;
+        player.atkDuracao = ATAQUES[atkNome].duracao;
+        player.animAtual = atkNome;
+        player.frameAtual = 0;
+        player.frameTimer = 0;
+
+        if (custoStamina > 0) {
+          player.stamina -= custoStamina;
+          player.staminaTimer = 0;
+        }
+
+        if (atkNome === 'attack')   tocarSom('ataque');
+        if (atkNome === 'attack_2') tocarSom('ataque2');
+        if (atkNome === 'attack_3') tocarSom('ataque3');
+      } else {
+        mostrarMensagem('Stamina insuficiente!');
+      }
+    }
+  }
+
+  // ===== ATAQUE EM ANDAMENTO =====
+  if (player.atacando) {
+    player.atkTimer--;
+    const anim = playerAnims[player.atkAtual];
+    player.frameTimer++;
+    if (player.frameTimer >= anim.velocidade) {
+      player.frameTimer = 0;
+      if (player.frameAtual < anim.frames - 1) {
+        player.frameAtual++;
+      } else {
+        player.atacando = false;
+        player.animAtual = 'idle';
+        player.frameAtual = 0;
+        player.frameTimer = 0;
+      }
+    }
+
+    const info = ATAQUES[player.atkAtual];
+    if (info.framesAtivos.includes(player.frameAtual)) {
+      const centroX = player.x + player.w / 2;
+      const centroY = player.y + player.h / 2;
+      const larguraTotal = info.alcance + player.w / 2;
+      const alturaTotal = info.altura + 40;
+      const hitbox = {
+        x: centroX - larguraTotal / 2,
+        y: centroY - alturaTotal / 2,
+        w: larguraTotal, h: alturaTotal
+      };
+
+      const atrib = atributosTotais();
+      const bonusForca = atrib.forca * 2;
+      const danoBase = info.dano + bonusForca;
+
+      inimigos.forEach(en => {
+        if (!en.alive || en.hitTimer > 0) return;
+        const centroEn = { x: en.x + en.w / 2, y: en.y + en.h / 2, w: 1, h: 1 };
+        if (rectsOverlap(hitbox, centroEn)) {
+          const critico = Math.random() < d.critChance;
+          const danoFinal = critico ? Math.floor(danoBase * 1.5) : danoBase;
+          en.levarDano(danoFinal, critico);
+
+          if (critico) tocarSom('critico');
+          else tocarSom('impacto');
+
+          criarParticulasImpacto(en.x + en.w / 2, en.y + en.h / 2, critico);
+          criarParticulasDano(en.x + en.w / 2, en.y + en.h / 2);
+        }
+      });
+    }
+  }
+
+  // ===== ANIMAÇÃO PADRÃO =====
+  if (!player.atacando && !player.defendendo && !player.emStun) {
+    let novaAnim;
+    if (!player.onGround) novaAnim = 'jump';
+    else if (player.vx !== 0) novaAnim = player.correndo ? 'run' : 'walk';
+    else novaAnim = 'idle';
+    if (player.animAtual !== novaAnim) {
+      player.animAtual = novaAnim;
+      player.frameAtual = 0;
+      player.frameTimer = 0;
+    }
+    player.frameTimer++;
+    const pAnim = playerAnims[player.animAtual];
+    if (player.frameTimer >= pAnim.velocidade) {
+      player.frameTimer = 0;
+      player.frameAtual = (player.frameAtual + 1) % pAnim.frames;
+
+      if (player.onGround && player.animAtual === 'walk' && player.frameAtual === 0) {
+        tocarSom('passo');
+        criarParticulasAndar(player.x + player.w / 2, ALTURA_CHAO - 5, false);
+      } else if (player.onGround && player.animAtual === 'run' && player.frameAtual === 0) {
+        tocarSom('corrida');
+        criarParticulasAndar(player.x + player.w / 2, ALTURA_CHAO - 5, true);
+      }
+    }
+  }
+
+  // ===== INIMIGOS =====
+  for (let i = inimigos.length - 1; i >= 0; i--) {
+    const en = inimigos[i];
+    const result = en.update(player);
+    if (result === 'remover') { inimigos.splice(i, 1); continue; }
+
+    if (en.alive && !player.morrendo && player.invuln === 0) {
+      const hitboxEn = en.getHitboxAtaque();
+      if (hitboxEn) {
+        if (rectsOverlap(hitboxEn, player)) {
+          let danoRecebido = en.atkDano;
+          if (player.defendendo) {
+            const frente = (player.facing > 0 && en.x > player.x) ||
+                           (player.facing < 0 && en.x < player.x);
+            if (frente) {
+              danoRecebido = 0;
+              tocarSom('defesa_bloqueio');
+            }
+          }
+          if (danoRecebido > 0) {
+            player.hp -= danoRecebido;
+            player.stunTimer = 30;
+            player.invuln = 90;
+            tocarSom('dano');
+            player.x += (player.x < en.x ? -40 : 40);
+            player.vx = 0;
+            player.vy = -4;
+            if (player.hp <= 0) {
+              player.hp = 0;
+              player.morrendo = true;
+              player.morteTimer = 0;
+              player.animAtual = 'death';
+              player.frameAtual = 0;
+              player.frameTimer = 0;
+              tocarSom('morte');
+            }
+          }
+        }
+      }
+    }
+  }
+
+  if (player.invuln > 0) player.invuln--;
+
+  // ===== CÂMERA =====
+  const alvoCamera = player.x + player.w / 2 - LARGURA / 2;
+  camera.x += (alvoCamera - camera.x) * 0.1;
+  camera.x = Math.max(0, Math.min(MUNDO_LARGURA - LARGURA, camera.x));
+
+  // ===== NÚMEROS FLUTUANTES =====
+  for (let i = numerosFlutuantes.length - 1; i >= 0; i--) {
+    const n = numerosFlutuantes[i];
+    n.y -= 0.8;
+    n.timer--;
+    if (n.timer <= 0) numerosFlutuantes.splice(i, 1);
+  }
+
+  // ===== PARTÍCULAS =====
+  for (let i = particulas.length - 1; i >= 0; i--) {
+    const p = particulas[i];
+    p.x += p.vx;
+    p.y += p.vy;
+    p.vy += p.gravidade;
+    p.vx *= 0.98;
+    p.vida--;
+    if (p.vida <= 0) particulas.splice(i, 1);
+  }
+
+  if (mensagem.timer > 0) mensagem.timer--;
+  if (player.hp > d.hpMax) player.hp = d.hpMax;
+  if (player.stamina > d.staminaMax) player.stamina = d.staminaMax;
+
+  keysPress = {};
+  mouse.clicou = false;
+}
+
+function rectsOverlap(a, b) {
+  return a.x < b.x + b.w && a.x + a.w > b.x &&
+         a.y < b.y + b.h && a.y + a.h > b.y;
+}
+
+// ============================================================
+// CONSTANTES DO INVENTÁRIO
+// ============================================================
+const INV_INICIO = { x: 720, y: 115, cols: 6, tam: 58, gap: 6 };
+const INV_TOTAL_SLOTS = 36;
+const SLOT_X = 60;
+const SLOT_Y = 115;
+const SLOT_W = 80;
+const SLOT_H = 80;
+const SLOT_GAP_X = 260;
+const SLOT_GAP_Y = 100;
+const LIXEIRA = { x: 1100, y: 620, tam: 80 };
+
+// ============================================================
+// TRATAR INVENTÁRIO
+// ============================================================
+function tratarInventario() {
+  const INV = INV_INICIO;
+
+  // ===== 1) CLIQUE EM SLOT EQUIPADO → DESEQUIPA =====
+  if (mouse.clicou) {
+    for (const s of SLOTS_INFO) {
+      const bx = SLOT_X + s.coluna * SLOT_GAP_X;
+      const by = SLOT_Y + s.linha * SLOT_GAP_Y;
+      if (mouse.x >= bx && mouse.x <= bx + SLOT_W &&
+          mouse.y >= by && mouse.y <= by + SLOT_H) {
+        if (player.equipados[s.id]) desequiparItem(s.id);
+        mouse.clicou = false;
+        return;
+      }
+    }
+  }
+
+  // ===== 2) INICIAR ARRASTO =====
+  if (mouse.clicou && itemArrastando === null) {
+    player.inventario.forEach((id, i) => {
+      if (itemArrastando !== null) return;
+      const col = i % INV.cols;
+      const row = Math.floor(i / INV.cols);
+      const bx = INV.x + col * (INV.tam + INV.gap);
+      const by = INV.y + row * (INV.tam + INV.gap);
+      if (mouse.x >= bx && mouse.x <= bx + INV.tam &&
+          mouse.y >= by && mouse.y <= by + INV.tam) {
+        itemArrastando = i;
+      }
+    });
+    mouse.clicou = false;
+  }
+
+  // ===== 3) SOLTAR ARRASTO =====
+  if (!mouse.pressionado && itemArrastando !== null) {
+    const idArrastado = player.inventario[itemArrastando];
+    const itemArrastado = idArrastado ? ITENS[idArrastado] : null;
+
+    // Lixeira
+    if (mouse.x >= LIXEIRA.x && mouse.x <= LIXEIRA.x + LIXEIRA.tam &&
+        mouse.y >= LIXEIRA.y && mouse.y <= LIXEIRA.y + LIXEIRA.tam) {
+      apagarItem(itemArrastando);
+      itemArrastando = null;
+      return;
+    }
+
+    // Acha slot alvo
+    let slotAlvo = null;
+    player.inventario.forEach((id, i) => {
+      if (slotAlvo !== null) return;
+      const col = i % INV.cols;
+      const row = Math.floor(i / INV.cols);
+      const bx = INV.x + col * (INV.tam + INV.gap);
+      const by = INV.y + row * (INV.tam + INV.gap);
+      if (mouse.x >= bx && mouse.x <= bx + INV.tam &&
+          mouse.y >= by && mouse.y <= by + INV.tam) {
+        slotAlvo = i;
+      }
+    });
+
+    // Clique simples → equipa
+    if (slotAlvo === itemArrastando) {
+      const id = player.inventario[itemArrastando];
+      itemArrastando = null;
+      equiparItem(id);
+      return;
+    }
+
+    // Merge
+    if (slotAlvo !== null && slotAlvo !== itemArrastando) {
+      const idAlvo = player.inventario[slotAlvo];
+      const itemAlvo = ITENS[idAlvo];
+
+      const nomeBaseArrastado = itemArrastado ? itemArrastado.nome.split(' (')[0].toLowerCase() : '';
+      const nomeBaseAlvo = itemAlvo ? itemAlvo.nome.split(' (')[0].toLowerCase() : '';
+      const tipoArrastado = nomeBaseArrastado.split(' ')[0];
+      const tipoAlvo = nomeBaseAlvo.split(' ')[0];
+
+      if (itemArrastado && itemAlvo && tipoArrastado === tipoAlvo) {
+        const bonusTotal = {};
+        for (const k in itemArrastado.bonus) bonusTotal[k] = (bonusTotal[k] || 0) + itemArrastado.bonus[k];
+        for (const k in itemAlvo.bonus) bonusTotal[k] = (bonusTotal[k] || 0) + itemAlvo.bonus[k];
+
+        const cfg = getConfigFase();
+        const tetoMerge = cfg.mergeMax;
+        const chavePrincipal = Object.keys(bonusTotal)[0];
+        let somaTotal = bonusTotal[chavePrincipal];
+
+        if (somaTotal > tetoMerge) {
+          const excesso = somaTotal - tetoMerge;
+          bonusTotal[chavePrincipal] = tetoMerge;
+          for (const k in bonusTotal) {
+            if (k === chavePrincipal) continue;
+            bonusTotal[k] = Math.max(0, bonusTotal[k] - excesso);
+          }
+          somaTotal = tetoMerge;
+        }
+
+        itemAlvo.bonus = bonusTotal;
+        const nomeBase = itemArrastado.nome.split(' (')[0];
+        itemAlvo.nome = nomeBase + ' (+' + somaTotal + ')';
+
+        player.inventario.splice(itemArrastando, 1);
+
+        mostrarMensagem('Merge! ' + itemAlvo.nome);
+        itemArrastando = null;
+        return;
+      }
+    }
+
+    itemArrastando = null;
+  }
+}
+
+// ============================================================
+// TRATAR ATRIBUTOS
+// ============================================================
+const ATRIB_Y = [230, 290, 350, 410, 470];
+const ATRIB_BOTAO_X = 700;
+const ATRIB_BOTAO_TAM = 44;
+
+function tratarAtributos() {
+  if (!mouse.clicou) return;
+  const lista = ['forca', 'vitalidade', 'agilidade', 'destreza', 'stamina'];
+  lista.forEach((chave, i) => {
+    const bx = ATRIB_BOTAO_X;
+    const by = ATRIB_Y[i] - ATRIB_BOTAO_TAM / 2 - 5;
+    if (mouse.x >= bx && mouse.x <= bx + ATRIB_BOTAO_TAM &&
+        mouse.y >= by && mouse.y <= by + ATRIB_BOTAO_TAM) {
+      gastarPonto(chave);
+      mouse.clicou = false;
+    }
+  });
+}
+
+// ============================================================
+// FIM DA PARTE 3 — CONTINUA NA PARTE 4
+// ============================================================
+// ============================================================
+// ÍCONES DO HUD
+// ============================================================
+function desenharIconeSalvar(cx, cy, tam) {
+  ctx.fillStyle = '#4ea8ff';
+  ctx.fillRect(cx, cy, tam, tam);
+  ctx.fillStyle = '#1a1a3a';
+  ctx.fillRect(cx + tam * 0.2, cy + tam * 0.15, tam * 0.6, tam * 0.3);
+  ctx.fillRect(cx + tam * 0.25, cy + tam * 0.55, tam * 0.5, tam * 0.3);
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(cx, cy, tam, tam);
+}
+function desenharIconeLoad(cx, cy, tam) {
+  ctx.fillStyle = '#ffb84d';
+  ctx.fillRect(cx, cy + tam * 0.2, tam, tam * 0.7);
+  ctx.fillRect(cx, cy + tam * 0.1, tam * 0.4, tam * 0.2);
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(cx, cy + tam * 0.2, tam, tam * 0.7);
+}
+function desenharIconeMenu(cx, cy, tam) {
+  ctx.fillStyle = '#4ea8ff';
+  ctx.beginPath();
+  ctx.moveTo(cx + tam / 2, cy);
+  ctx.lineTo(cx + tam, cy + tam * 0.5);
+  ctx.lineTo(cx, cy + tam * 0.5);
+  ctx.closePath();
+  ctx.fill();
+  ctx.fillStyle = '#1a1a3a';
+  ctx.fillRect(cx + tam * 0.15, cy + tam * 0.5, tam * 0.7, tam * 0.5);
+  ctx.fillStyle = '#4ea8ff';
+  ctx.fillRect(cx + tam * 0.4, cy + tam * 0.65, tam * 0.2, tam * 0.35);
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(cx, cy, tam, tam);
+}
+function desenharIconeLixeira(cx, cy, tam) {
+  ctx.fillStyle = '#e94560';
+  ctx.fillRect(cx + tam * 0.2, cy + tam * 0.35, tam * 0.6, tam * 0.6);
+  ctx.fillRect(cx + tam * 0.15, cy + tam * 0.25, tam * 0.7, tam * 0.1);
+  ctx.fillRect(cx + tam * 0.4, cy + tam * 0.15, tam * 0.2, tam * 0.1);
+  ctx.strokeStyle = '#fff';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(cx + tam * 0.35, cy + tam * 0.45);
+  ctx.lineTo(cx + tam * 0.35, cy + tam * 0.85);
+  ctx.moveTo(cx + tam * 0.5, cy + tam * 0.45);
+  ctx.lineTo(cx + tam * 0.5, cy + tam * 0.85);
+  ctx.moveTo(cx + tam * 0.65, cy + tam * 0.45);
+  ctx.lineTo(cx + tam * 0.65, cy + tam * 0.85);
+  ctx.stroke();
+}
+function desenharBotaoArredondado(x, y, w, h, r, corFundo, corBorda, texto, corTexto) {
+  // Fundo
+  ctx.fillStyle = corFundo;
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.lineTo(x + w - r, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+  ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+  ctx.lineTo(x, y + r);
+  ctx.quadraticCurveTo(x, y, x + r, y);
+  ctx.closePath();
+  ctx.fill();
+
+  // Borda
+  ctx.strokeStyle = corBorda;
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Texto
+  ctx.fillStyle = corTexto;
+  ctx.font = 'bold 20px monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(texto, x + w / 2, y + h / 2);
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+}
+// ============================================================
+// MENU PRINCIPAL (com seletor de fases)
+// ============================================================
+function drawMenu() {
+  // Fundo
+  if (menuFundoImg.complete && menuFundoImg.naturalWidth > 0) {
+    ctx.drawImage(menuFundoImg, 0, 0, LARGURA, ALTURA);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.25)';
+    ctx.fillRect(0, 0, LARGURA, ALTURA);
+  } else {
+    const grad = ctx.createLinearGradient(0, 0, 0, ALTURA);
+    grad.addColorStop(0, '#0a0a1e');
+    grad.addColorStop(1, '#1a1a3e');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, LARGURA, ALTURA);
+    ctx.fillStyle = '#fff';
+    for (let i = 0; i < 80; i++) {
+      ctx.fillRect((i * 173) % LARGURA, (i * 91) % 400, (i % 3) + 1, (i % 3) + 1);
+    }
+  }
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'alphabetic';
+
+  // ===== TÍTULO =====
+  ctx.font = 'bold 96px monospace';
+  ctx.shadowColor = '#4ea8ff';
+  ctx.shadowBlur = 40;
+  ctx.fillStyle = '#4ea8ff';
+  ctx.fillText('BEYOND', LARGURA / 2, 170);
+
+  ctx.shadowColor = '#e94560';
+  ctx.shadowBlur = 40;
+  ctx.fillStyle = '#e94560';
+  ctx.fillText('TIME', LARGURA / 2, 265);
+  ctx.shadowBlur = 0;
+
+  // ===== BOTÕES PRINCIPAIS (centralizados) =====
+  const btnW = 260;
+  const btnH = 56;
+  const btnX = (LARGURA - btnW) / 2;
+
+  // Distância do título até os botões
+  const btnStartY = 340;
+  const btnGap = 20;
+
+  const botoes = [
+    { texto: '▶  NEW GAME', y: btnStartY,                  ativo: true },
+    { texto: '▶  CONTINUE', y: btnStartY + btnH + btnGap,  ativo: temSave }
+  ];
+
+  botoes.forEach(b => {
+    const hover = mouse.x > btnX && mouse.x < btnX + btnW &&
+                  mouse.y > b.y && mouse.y < b.y + btnH;
+    const corFundo = b.ativo ? (hover ? '#4ea8ff' : '#2a5a8a') : '#222';
+    const corBorda = b.ativo ? '#4ea8ff' : '#444';
+    const corTexto = b.ativo ? '#fff' : '#666';
+
+    desenharBotaoArredondado(btnX, b.y, btnW, btnH, 12, corFundo, corBorda, b.texto, corTexto);
+  });
+
+  // ===== RÓTULO DO SELETOR =====
+  // Logo abaixo do último botão
+  const ultimoBotaoY = botoes[botoes.length - 1].y + btnH;
+  const rotuloY = ultimoBotaoY + 45;
+
+  ctx.fillStyle = '#ffffff';
+  ctx.font = 'bold 18px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('SELECIONAR FASE', LARGURA / 2, rotuloY);
+
+  // Linha decorativa
+  ctx.strokeStyle = '#4ea8ff';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(LARGURA / 2 - 110, rotuloY + 12);
+  ctx.lineTo(LARGURA / 2 + 110, rotuloY + 12);
+  ctx.stroke();
+
+  // ===== SELETOR DE FASES (2 linhas × 3 colunas, centralizado) =====
+  const fTam = 62;
+  const fGap = 20;
+  const fTotalLargura = fTam * 3 + fGap * 2;
+  const fTotalAltura  = fTam * 2 + fGap;
+  const fInicioX = (LARGURA - fTotalLargura) / 2;
+  // Posiciona o bloco de fases logo abaixo do rótulo
+  const fInicioY = rotuloY + 30;
+
+  for (let i = 1; i <= 6; i++) {
+    const idx = i - 1;
+    const col = idx % 3;
+    const row = Math.floor(idx / 3);
+    const bx = fInicioX + col * (fTam + fGap);
+    const by = fInicioY + row * (fTam + fGap);
+
+    const liberada = i <= fasesLiberadas;
+    const hover = mouse.x >= bx && mouse.x <= bx + fTam &&
+                  mouse.y >= by && mouse.y <= by + fTam;
+
+    const corFundo = liberada ? (hover ? '#4ea8ff' : '#2a5a8a') : '#1a1a2a';
+    const corBorda = liberada ? (hover ? '#ff0' : '#4ea8ff') : '#333';
+
+    ctx.fillStyle = corFundo;
+    ctx.beginPath();
+    ctx.moveTo(bx + 10, by);
+    ctx.lineTo(bx + fTam - 10, by);
+    ctx.quadraticCurveTo(bx + fTam, by, bx + fTam, by + 10);
+    ctx.lineTo(bx + fTam, by + fTam - 10);
+    ctx.quadraticCurveTo(bx + fTam, by + fTam, bx + fTam - 10, by + fTam);
+    ctx.lineTo(bx + 10, by + fTam);
+    ctx.quadraticCurveTo(bx, by + fTam, bx, by + fTam - 10);
+    ctx.lineTo(bx, by + 10);
+    ctx.quadraticCurveTo(bx, by, bx + 10, by);
+    ctx.closePath();
+    ctx.fill();
+    ctx.strokeStyle = corBorda;
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    if (liberada) {
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 28px monospace';
+      ctx.fillText(i.toString(), bx + fTam / 2, by + fTam / 2 + 1);
+    } else {
+      ctx.fillStyle = '#555';
+      ctx.font = 'bold 24px monospace';
+      ctx.fillText('🔒', bx + fTam / 2, by + fTam / 2 + 2);
+    }
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+  }
+
+  // ===== INSTRUÇÃO (rodapé) =====
+  ctx.fillStyle = 'rgba(255, 255, 255, 0.5)';
+  ctx.font = '13px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('Clique numa fase liberada para começar', LARGURA / 2, ALTURA - 15);
+  ctx.textAlign = 'left';
+}
+// ============================================================
+// TELA DE VITÓRIA
+// ============================================================
+function drawVitoria(numeroFase) {
+  const grad = ctx.createLinearGradient(0, 0, 0, ALTURA);
+  grad.addColorStop(0, '#0a1e0a');
+  grad.addColorStop(1, '#1a3e1a');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, LARGURA, ALTURA);
+
+  ctx.fillStyle = '#fff';
+  for (let i = 0; i < 80; i++) {
+    ctx.fillRect((i * 173) % LARGURA, (i * 91) % 400, 2, 2);
+  }
+
+  ctx.fillStyle = '#0f0';
+  ctx.font = 'bold 80px monospace';
+  ctx.textAlign = 'center';
+  ctx.shadowColor = '#0f0';
+  ctx.shadowBlur = 30;
+  ctx.fillText('FASE ' + numeroFase + ' COMPLETA!', LARGURA / 2, 260);
+  ctx.shadowBlur = 0;
+
+  ctx.fillStyle = '#ff0';
+  ctx.font = 'bold 28px monospace';
+  ctx.fillText('Chefe derrotado!', LARGURA / 2, 340);
+
+  ctx.fillStyle = '#fff';
+  ctx.font = '20px monospace';
+  ctx.fillText('Você recebeu 2 equipamentos lendários!', LARGURA / 2, 390);
+
+  const hover = mouse.x > 440 && mouse.x < 840 && mouse.y > 460 && mouse.y < 510;
+  ctx.fillStyle = hover ? '#4ea8ff' : '#2a5a8a';
+  ctx.fillRect(440, 460, 400, 50);
+  ctx.strokeStyle = '#4ea8ff';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(440, 460, 400, 50);
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 22px monospace';
+  ctx.fillText('▶ PRÓXIMA FASE', 640, 493);
+  ctx.textAlign = 'left';
+}
+
+// ============================================================
+// JOGO COMPLETO
+// ============================================================
+function drawJogoCompleto() {
+  const grad = ctx.createLinearGradient(0, 0, 0, ALTURA);
+  grad.addColorStop(0, '#1e0a1e');
+  grad.addColorStop(1, '#3e1a3e');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, LARGURA, ALTURA);
+
+  ctx.fillStyle = '#fff';
+  for (let i = 0; i < 100; i++) {
+    ctx.fillRect((i * 173) % LARGURA, (i * 91) % 400, (i % 4) + 1, (i % 4) + 1);
+  }
+
+  ctx.fillStyle = '#ff0';
+  ctx.font = 'bold 96px monospace';
+  ctx.textAlign = 'center';
+  ctx.shadowColor = '#ff0';
+  ctx.shadowBlur = 40;
+  ctx.fillText('JOGO', LARGURA / 2, 240);
+  ctx.fillText('COMPLETO!', LARGURA / 2, 340);
+  ctx.shadowBlur = 0;
+
+  ctx.fillStyle = '#f0f';
+  ctx.font = 'bold 28px monospace';
+  ctx.fillText('Você derrotou o Vazio!', LARGURA / 2, 410);
+
+  ctx.fillStyle = '#fff';
+  ctx.font = '20px monospace';
+  ctx.fillText('Obrigado por jogar BEYOND TIME', LARGURA / 2, 450);
+
+  const hover = mouse.x > 540 && mouse.x < 740 && mouse.y > 490 && mouse.y < 540;
+  ctx.fillStyle = hover ? '#4ea8ff' : '#2a5a8a';
+  ctx.fillRect(540, 490, 200, 50);
+  ctx.strokeStyle = '#4ea8ff';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(540, 490, 200, 50);
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 20px monospace';
+  ctx.fillText('VOLTAR AO MENU', 640, 523);
+  ctx.textAlign = 'left';
+}
+
+// ============================================================
+// PAUSA
+// ============================================================
+function drawPausa() {
+  ctx.fillStyle = 'rgba(0,0,0,0.85)';
+  ctx.fillRect(0, 0, LARGURA, ALTURA);
+
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 60px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('PAUSADO', LARGURA / 2, 180);
+
+  const botoes = [
+    { texto: '▶ CONTINUAR',    y: 280, icone: null },
+    { texto: 'SALVAR',         y: 350, icone: 'save' },
+    { texto: 'CARREGAR',       y: 420, icone: 'load' },
+    { texto: 'MENU PRINCIPAL', y: 490, icone: 'menu' }
+  ];
+  botoes.forEach(b => {
+    const hover = mouse.x > 440 && mouse.x < 840 && mouse.y > b.y && mouse.y < b.y + 50;
+    ctx.fillStyle = hover ? '#4ea8ff' : '#2a5a8a';
+    ctx.fillRect(440, b.y, 400, 50);
+    ctx.strokeStyle = '#4ea8ff';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(440, b.y, 400, 50);
+    let tx = 640;
+    if (b.icone === 'save') { desenharIconeSalvar(460, b.y + 10, 30); tx = 660; }
+    if (b.icone === 'load') { desenharIconeLoad(460, b.y + 10, 30); tx = 660; }
+    if (b.icone === 'menu') { desenharIconeMenu(460, b.y + 10, 30); tx = 660; }
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 20px monospace';
+    ctx.fillText(b.texto, tx, b.y + 33);
+  });
+
+  ctx.fillStyle = '#888';
+  ctx.font = '14px monospace';
+  ctx.fillText('ESC para voltar ao jogo', LARGURA / 2, 620);
+  ctx.textAlign = 'left';
+}
+
+// ============================================================
+// GAME OVER
+// ============================================================
+function drawGameOver() {
+  ctx.fillStyle = 'rgba(0,0,0,0.85)';
+  ctx.fillRect(0, 0, LARGURA, ALTURA);
+
+  ctx.fillStyle = '#e94560';
+  ctx.font = 'bold 96px monospace';
+  ctx.textAlign = 'center';
+  ctx.shadowColor = '#e94560';
+  ctx.shadowBlur = 20;
+  ctx.fillText('GAME OVER', LARGURA / 2, 320);
+  ctx.shadowBlur = 0;
+
+  ctx.fillStyle = '#fff';
+  ctx.font = '24px monospace';
+  ctx.fillText('Pressione R para reiniciar a Fase ' + faseAtual, LARGURA / 2, 420);
+  ctx.fillStyle = '#888';
+  ctx.font = '18px monospace';
+  ctx.fillText('Pressione ESC para o menu principal', LARGURA / 2, 460);
+  ctx.textAlign = 'left';
+}
+
+// ============================================================
+// INVENTÁRIO
+// ============================================================
+function drawInventario() {
+  ctx.fillStyle = 'rgba(10, 10, 20, 0.94)';
+  ctx.fillRect(0, 0, LARGURA, ALTURA);
+
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 28px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('INVENTÁRIO', LARGURA / 2, 40);
+  ctx.textAlign = 'left';
+
+  ctx.strokeStyle = '#333';
+  ctx.beginPath(); ctx.moveTo(40, 62); ctx.lineTo(LARGURA - 40, 62); ctx.stroke();
+
+  // SLOTS EQUIPADOS
+  ctx.fillStyle = '#4ea8ff';
+  ctx.font = 'bold 18px monospace';
+  ctx.fillText('EQUIPADOS', SLOT_X, 100);
+
+  SLOTS_INFO.forEach(s => {
+    const bx = SLOT_X + s.coluna * SLOT_GAP_X;
+    const by = SLOT_Y + s.linha * SLOT_GAP_Y;
+
+    const id = player.equipados[s.id];
+    const item = id ? ITENS[id] : null;
+
+    ctx.fillStyle = item ? '#1a1a3a' : '#0f0f1a';
+    ctx.fillRect(bx, by, SLOT_W, SLOT_H);
+    ctx.strokeStyle = item ? '#4ea8ff' : '#333';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(bx, by, SLOT_W, SLOT_H);
+
+    if (item) {
+      if (item.img && item.img.complete && item.img.naturalWidth > 0) {
+        ctx.drawImage(item.img, bx + 10, by + 5, 60, 60);
+      } else {
+        ctx.fillStyle = item.cor || '#888';
+        ctx.fillRect(bx + 15, by + 10, 50, 50);
+      }
+    } else {
+      ctx.fillStyle = '#333';
+      ctx.font = '10px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('vazio', bx + SLOT_W / 2, by + SLOT_H / 2 + 4);
+      ctx.textAlign = 'left';
+    }
+
+    ctx.fillStyle = '#888';
+    ctx.font = 'bold 11px monospace';
+    ctx.fillText(s.nome.toUpperCase(), bx, by + SLOT_H + 14);
+
+    if (item) {
+      ctx.fillStyle = '#fff';
+      ctx.font = 'bold 12px monospace';
+      const nome = item.nome.length > 20 ? item.nome.slice(0, 18) + '..' : item.nome;
+      ctx.fillText(nome, bx + SLOT_W + 10, by + 22);
+
+      if (item.bonus) {
+        const bonusTxt = Object.entries(item.bonus)
+          .filter(([k, v]) => v > 0)
+          .map(([k, v]) => `+${v} ${ATRIBUTOS[k].nome}`)
+          .join(', ');
+        ctx.fillStyle = '#0f0';
+        ctx.font = '10px monospace';
+        ctx.fillText(bonusTxt || '(sem bônus)', bx + SLOT_W + 10, by + 42);
+      }
+    }
+  });
+
+  // MOCHILA
+  const INV = INV_INICIO;
+
+  ctx.fillStyle = '#4ea8ff';
+  ctx.font = 'bold 18px monospace';
+  ctx.fillText('MOCHILA', INV.x, 100);
+
+  const totalSlots = INV_TOTAL_SLOTS;
+  for (let i = 0; i < totalSlots; i++) {
+    const col = i % INV.cols;
+    const row = Math.floor(i / INV.cols);
+    const bx = INV.x + col * (INV.tam + INV.gap);
+    const by = INV.y + row * (INV.tam + INV.gap);
+
+    ctx.fillStyle = '#0f0f1a';
+    ctx.fillRect(bx, by, INV.tam, INV.tam);
+    ctx.strokeStyle = '#333';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(bx, by, INV.tam, INV.tam);
+
+    const id = player.inventario[i];
+    if (id) {
+      const item = ITENS[id];
+      const hover = mouse.x >= bx && mouse.x <= bx + INV.tam &&
+                    mouse.y >= by && mouse.y <= by + INV.tam;
+
+      if (item.img && item.img.complete && item.img.naturalWidth > 0) {
+        ctx.drawImage(item.img, bx + 5, by + 5, INV.tam - 10, INV.tam - 10);
+      } else {
+        ctx.fillStyle = item.cor || '#888';
+        ctx.fillRect(bx + 8, by + 8, INV.tam - 16, INV.tam - 16);
+      }
+
+      const bonusPrinc = item.bonus ? Object.values(item.bonus)[0] : 0;
+      const cfgAtual = getConfigFase();
+      let corBorda = '#0f0';
+      const terc = cfgAtual.mergeMax / 3;
+      if (bonusPrinc >= terc * 2) corBorda = '#ff0';
+      else if (bonusPrinc >= terc) corBorda = '#f0f';
+      else if (bonusPrinc >= terc / 2) corBorda = '#4ea8ff';
+
+      ctx.strokeStyle = hover ? '#ff0' : corBorda;
+      ctx.lineWidth = hover ? 3 : 2;
+      ctx.strokeRect(bx + 5, by + 5, INV.tam - 10, INV.tam - 10);
+    }
+  }
+
+  // LIXEIRA
+  ctx.fillStyle = 'rgba(20, 10, 15, 0.9)';
+  ctx.fillRect(LIXEIRA.x, LIXEIRA.y, LIXEIRA.tam, LIXEIRA.tam);
+  ctx.strokeStyle = '#e94560';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(LIXEIRA.x, LIXEIRA.y, LIXEIRA.tam, LIXEIRA.tam);
+
+  desenharIconeLixeira(LIXEIRA.x + 10, LIXEIRA.y + 10, LIXEIRA.tam - 20);
+
+  ctx.fillStyle = '#e94560';
+  ctx.font = 'bold 12px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('APAGAR', LIXEIRA.x + LIXEIRA.tam / 2, LIXEIRA.y + LIXEIRA.tam + 18);
+  ctx.textAlign = 'left';
+
+  // TOOLTIP
+  const hoverInv = (() => {
+    for (let i = 0; i < totalSlots; i++) {
+      const col = i % INV.cols;
+      const row = Math.floor(i / INV.cols);
+      const bx = INV.x + col * (INV.tam + INV.gap);
+      const by = INV.y + row * (INV.tam + INV.gap);
+      if (mouse.x >= bx && mouse.x <= bx + INV.tam &&
+          mouse.y >= by && mouse.y <= by + INV.tam &&
+          player.inventario[i]) {
+        return { id: player.inventario[i] };
+      }
+    }
+    return null;
+  })();
+
+  if (hoverInv) {
+    const item = ITENS[hoverInv.id];
+    const tX = 60, tY = 620, tW = 1000, tH = 80;
+
+    ctx.fillStyle = 'rgba(20, 20, 40, 0.95)';
+    ctx.fillRect(tX, tY, tW, tH);
+    ctx.strokeStyle = '#4ea8ff';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(tX, tY, tW, tH);
+
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 15px monospace';
+    ctx.fillText(item.nome, tX + 15, tY + 22);
+
+    if (item.bonus) {
+      const bonusTxt = Object.entries(item.bonus)
+        .filter(([k, v]) => v > 0)
+        .map(([k, v]) => `+${v} ${ATRIBUTOS[k].nome}`)
+        .join('  |  ');
+      ctx.fillStyle = '#0f0';
+      ctx.font = 'bold 12px monospace';
+      ctx.fillText(bonusTxt || '(sem bônus)', tX + 15, tY + 44);
+    }
+
+    if (item.desc) {
+      ctx.fillStyle = '#aaa';
+      ctx.font = 'italic 11px monospace';
+      ctx.fillText(item.desc, tX + 15, tY + 65);
+    }
+  }
+
+  // ITEM ARRASTANDO
+  if (itemArrastando !== null && player.inventario[itemArrastando]) {
+    const idArrastado = player.inventario[itemArrastando];
+    const itemArrastado = ITENS[idArrastado];
+
+    ctx.globalAlpha = 0.7;
+    if (itemArrastado.img && itemArrastado.img.complete && itemArrastado.img.naturalWidth > 0) {
+      ctx.drawImage(itemArrastado.img, mouse.x - 35, mouse.y - 35, 70, 70);
+    } else {
+      ctx.fillStyle = itemArrastado.cor || '#888';
+      ctx.fillRect(mouse.x - 30, mouse.y - 30, 60, 60);
+    }
+    ctx.strokeStyle = '#ff0';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(mouse.x - 35, mouse.y - 35, 70, 70);
+    ctx.globalAlpha = 1;
+  }
+
+  // RODAPÉ
+  const cfg = getConfigFase();
+  ctx.fillStyle = '#888';
+  ctx.font = '12px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('Clique para EQUIPAR  |  Arraste 2 itens do mesmo tipo para FUNDIR (máx +' + cfg.mergeMax + ')  |  Arraste pra lixeira para APAGAR', LARGURA / 2, ALTURA - 20);
+  ctx.textAlign = 'left';
+}
+
+// ============================================================
+// ATRIBUTOS
+// ============================================================
+function drawAtributos() {
+  ctx.fillStyle = 'rgba(10, 10, 20, 0.94)';
+  ctx.fillRect(0, 0, LARGURA, ALTURA);
+
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 28px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('PERSONAGEM', LARGURA / 2, 50);
+  ctx.textAlign = 'left';
+
+  ctx.strokeStyle = '#333';
+  ctx.beginPath(); ctx.moveTo(40, 75); ctx.lineTo(LARGURA - 40, 75); ctx.stroke();
+
+  ctx.fillStyle = '#4ea8ff';
+  ctx.font = 'bold 22px monospace';
+  ctx.fillText('Nível ' + player.nivel, 80, 125);
+
+  ctx.fillStyle = '#000';
+  ctx.fillRect(80, 145, 500, 26);
+  ctx.fillStyle = '#0f0';
+  ctx.fillRect(82, 147, 496 * (player.xp / player.xpProximo), 22);
+  ctx.strokeStyle = '#444'; ctx.lineWidth = 2;
+  ctx.strokeRect(80, 145, 500, 26);
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 13px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(`XP: ${player.xp} / ${player.xpProximo}`, 330, 163);
+  ctx.textAlign = 'left';
+
+  ctx.fillStyle = player.pontosDisponiveis > 0 ? '#0f0' : '#666';
+  ctx.font = 'bold 18px monospace';
+  ctx.fillText(`Pontos disponíveis: ${player.pontosDisponiveis}`, 80, 210);
+
+  // Pontos de STAMINA (em verde)
+  ctx.fillStyle = (player.pontosStamina || 0) > 0 ? '#ffcc00' : '#666';
+  ctx.font = 'bold 16px monospace';
+  ctx.fillText(`Pontos de STAMINA: ${player.pontosStamina || 0}`, 420, 210);
+
+  const lista = ['forca', 'vitalidade', 'agilidade', 'destreza', 'stamina'];
+  const t = atributosTotais();
+
+  lista.forEach((chave, i) => {
+    const y = ATRIB_Y[i];
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 20px monospace';
+    ctx.fillText(ATRIBUTOS[chave].nome, 80, y + 8);
+    const base = player.atributos[chave];
+    const bonus = t[chave] - base;
+    ctx.fillStyle = '#4ea8ff';
+    ctx.font = 'bold 26px monospace';
+    ctx.fillText(base.toString(), 380, y + 10);
+    if (bonus > 0) {
+      ctx.fillStyle = '#0f0';
+      ctx.font = 'bold 18px monospace';
+      ctx.fillText(`+${bonus}`, 430, y + 10);
+    }
+    ctx.fillStyle = '#888';
+    ctx.font = '13px monospace';
+    ctx.fillText(ATRIBUTOS[chave].desc, 80, y + 30);
+
+    const bx = ATRIB_BOTAO_X;
+    const by = y - ATRIB_BOTAO_TAM / 2 - 5;
+    const hover = mouse.x >= bx && mouse.x <= bx + ATRIB_BOTAO_TAM &&
+                  mouse.y >= by && mouse.y <= by + ATRIB_BOTAO_TAM;
+    const ativo = (chave === 'stamina')
+      ? ((player.pontosStamina || 0) > 0)
+      : (player.pontosDisponiveis > 0);
+    ctx.fillStyle = ativo ? (hover ? '#4ea8ff' : '#2a5a8a') : '#333';
+    ctx.fillRect(bx, by, ATRIB_BOTAO_TAM, ATRIB_BOTAO_TAM);
+    ctx.strokeStyle = ativo ? '#4ea8ff' : '#555';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(bx, by, ATRIB_BOTAO_TAM, ATRIB_BOTAO_TAM);
+    ctx.fillStyle = ativo ? '#fff' : '#666';
+    ctx.font = 'bold 32px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText('+', bx + ATRIB_BOTAO_TAM / 2, by + 34);
+    ctx.textAlign = 'left';
+  });
+
+  ctx.fillStyle = '#666';
+  ctx.font = '13px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText('[P] fechar  |  [I] inventário', LARGURA / 2, ALTURA - 20);
+  ctx.textAlign = 'left';
+}
+
+// ============================================================
+// POPUP
+// ============================================================
+function drawPopup() {
+  if (!popupAtivo) return;
+
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+  ctx.fillRect(0, 0, LARGURA, ALTURA);
+
+  const cx = LARGURA / 2 - 300;
+  const cy = 250;
+  const cw = 600;
+  const ch = 260;
+
+  ctx.fillStyle = '#1a1a3e';
+  ctx.fillRect(cx, cy, cw, ch);
+  ctx.strokeStyle = '#4ea8ff';
+  ctx.lineWidth = 3;
+  ctx.strokeRect(cx, cy, cw, ch);
+
+  const titulos = { load: 'Carregar jogo?', menu: 'Voltar ao menu principal?' };
+  const avisos = { load: 'O progresso não salvo será perdido.', menu: 'O progresso não salvo será perdido.' };
+
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 28px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(titulos[popupAtivo], LARGURA / 2, cy + 70);
+
+  ctx.fillStyle = '#aaa';
+  ctx.font = '16px monospace';
+  ctx.fillText(avisos[popupAtivo], LARGURA / 2, cy + 110);
+
+  const btnSim = { x: LARGURA / 2 - 220, y: 400, w: 200, h: 60 };
+  const btnNao = { x: LARGURA / 2 + 20,  y: 400, w: 200, h: 60 };
+
+  const hoverSim = mouse.x >= btnSim.x && mouse.x <= btnSim.x + btnSim.w &&
+                   mouse.y >= btnSim.y && mouse.y <= btnSim.y + btnSim.h;
+  ctx.fillStyle = hoverSim ? '#4ea8ff' : '#2a5a8a';
+  ctx.fillRect(btnSim.x, btnSim.y, btnSim.w, btnSim.h);
+  ctx.strokeStyle = '#4ea8ff';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(btnSim.x, btnSim.y, btnSim.w, btnSim.h);
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 22px monospace';
+  ctx.fillText('SIM', btnSim.x + btnSim.w / 2, btnSim.y + 38);
+
+  const hoverNao = mouse.x >= btnNao.x && mouse.x <= btnNao.x + btnNao.w &&
+                   mouse.y >= btnNao.y && mouse.y <= btnNao.y + btnNao.h;
+  ctx.fillStyle = hoverNao ? '#e94560' : '#7a2535';
+  ctx.fillRect(btnNao.x, btnNao.y, btnNao.w, btnNao.h);
+  ctx.strokeStyle = '#e94560';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(btnNao.x, btnNao.y, btnNao.w, btnNao.h);
+  ctx.fillStyle = '#fff';
+  ctx.fillText('NÃO', btnNao.x + btnNao.w / 2, btnNao.y + 38);
+
+  ctx.fillStyle = '#666';
+  ctx.font = '13px monospace';
+  ctx.fillText('ESC para cancelar', LARGURA / 2, cy + ch - 20);
+
+  ctx.textAlign = 'left';
+}
+
+// ============================================================
+// HUD
+// ============================================================
+function desenharHUD() {
+  const d = derivados();
+
+  const topoY = 10;
+  const topoH = 48;
+  const controlesX = 10;
+  const controlesLargura = LARGURA - 20;
+
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+  ctx.fillRect(controlesX, topoY, controlesLargura, topoH);
+  ctx.strokeStyle = '#4ea8ff';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(controlesX, topoY, controlesLargura, topoH);
+
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 12px monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText('←→ mover | SHIFT correr | Z/X/C atacar | Q defender | I inv | P atributos | ESC pausa',
+               controlesX + 14, topoY + 30);
+
+  // Ícones
+  const tamIcone = 32;
+  const espacamento = 8;
+  const iconesLarguraTotal = tamIcone * 3 + espacamento * 2;
+  const iconesX = controlesX + controlesLargura - iconesLarguraTotal - 10;
+
+  HUD_ICONES[0].x = iconesX;
+  HUD_ICONES[1].x = iconesX + tamIcone + espacamento;
+  HUD_ICONES[2].x = iconesX + (tamIcone + espacamento) * 2;
+  HUD_ICONES.forEach(i => {
+    i.y = topoY + (topoH - tamIcone) / 2;
+    i.tam = tamIcone;
+  });
+
+  HUD_ICONES.forEach(icone => {
+    const hover = icone.hover;
+    ctx.fillStyle = hover ? 'rgba(78, 168, 255, 0.4)' : 'rgba(0, 0, 0, 0.6)';
+    ctx.fillRect(icone.x, icone.y, icone.tam, icone.tam);
+    ctx.strokeStyle = hover ? '#ff0' : '#4ea8ff';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(icone.x, icone.y, icone.tam, icone.tam);
+
+    if (icone.id === 'save') desenharIconeSalvar(icone.x, icone.y, icone.tam);
+    if (icone.id === 'load') desenharIconeLoad(icone.x, icone.y, icone.tam);
+    if (icone.id === 'menu') desenharIconeMenu(icone.x, icone.y, icone.tam);
+  });
+
+  const L = getVolumeLayout();
+
+  // SFX
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+  ctx.fillRect(L.sfx.iconeX, L.sfx.iconeY, L.sfx.iconeTam, L.sfx.iconeTam);
+  ctx.strokeStyle = '#4ea8ff';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(L.sfx.iconeX, L.sfx.iconeY, L.sfx.iconeTam, L.sfx.iconeTam);
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 18px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText((volumeSFX === 0) ? '🔇' : '🔊', L.sfx.iconeX + 16, L.sfx.iconeY + 22);
+  ctx.textAlign = 'left';
+
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+  ctx.fillRect(L.sfx.sliderX, L.sfx.sliderY, L.sfx.sliderW, L.sfx.sliderH);
+  ctx.fillStyle = '#4ea8ff';
+  ctx.fillRect(L.sfx.sliderX + 1, L.sfx.sliderY + 1, (L.sfx.sliderW - 2) * volumeSFX, L.sfx.sliderH - 2);
+  ctx.strokeStyle = '#4ea8ff';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(L.sfx.sliderX, L.sfx.sliderY, L.sfx.sliderW, L.sfx.sliderH);
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 10px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(Math.floor(volumeSFX * 100) + '%', L.sfx.sliderX + L.sfx.sliderW / 2, L.sfx.sliderY + 11);
+  ctx.textAlign = 'left';
+
+  // Música
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+  ctx.fillRect(L.musica.iconeX, L.musica.iconeY, L.musica.iconeTam, L.musica.iconeTam);
+  ctx.strokeStyle = '#ffb84d';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(L.musica.iconeX, L.musica.iconeY, L.musica.iconeTam, L.musica.iconeTam);
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 18px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText((volumeMusica === 0) ? '🔇' : '🎵', L.musica.iconeX + 16, L.musica.iconeY + 22);
+  ctx.textAlign = 'left';
+
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+  ctx.fillRect(L.musica.sliderX, L.musica.sliderY, L.musica.sliderW, L.musica.sliderH);
+  ctx.fillStyle = '#ffb84d';
+  ctx.fillRect(L.musica.sliderX + 1, L.musica.sliderY + 1, (L.musica.sliderW - 2) * volumeMusica, L.musica.sliderH - 2);
+  ctx.strokeStyle = '#ffb84d';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(L.musica.sliderX, L.musica.sliderY, L.musica.sliderW, L.musica.sliderH);
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 10px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(Math.floor(volumeMusica * 100) + '%', L.musica.sliderX + L.musica.sliderW / 2, L.musica.sliderY + 11);
+  ctx.textAlign = 'left';
+
+  // Barra de progresso
+  const progX = 10;
+  const progY = topoY + topoH + 10;
+  const progW = 300;
+  const progH = 46;
+
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+  ctx.fillRect(progX, progY, progW, progH);
+  ctx.strokeStyle = '#4ea8ff';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(progX, progY, progW, progH);
+
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 13px monospace';
+  ctx.textAlign = 'left';
+  const cfgF = getConfigFase();
+  ctx.fillText('Fase ' + faseAtual + ' — ' + cfgF.nome, progX + 12, progY + 18);
+
+  const barX = progX + 12;
+  const barY = progY + 24;
+  const barW = progW - 24;
+  const barH = 14;
+  const progresso = player.x / (MUNDO_LARGURA - player.w);
+
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+  ctx.fillRect(barX, barY, barW, barH);
+  ctx.fillStyle = '#4ea8ff';
+  ctx.fillRect(barX + 1, barY + 1, (barW - 2) * progresso, barH - 2);
+  ctx.strokeStyle = '#4ea8ff';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(barX, barY, barW, barH);
+
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 10px monospace';
+  ctx.textAlign = 'center';
+  ctx.fillText(Math.floor(progresso * 100) + '%', barX + barW / 2, barY + 10);
+  ctx.textAlign = 'left';
+
+  // Painel HP/XP
+  const painelX = 10;
+  const painelY = progY + progH + 8;
+  const painelW = 300;
+  const painelH = 100;
+
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.8)';
+  ctx.fillRect(painelX, painelY, painelW, painelH);
+  ctx.strokeStyle = '#4ea8ff';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(painelX, painelY, painelW, painelH);
+
+  ctx.fillStyle = '#000';
+  ctx.fillRect(painelX + 10, painelY + 10, painelW - 20, 22);
+  ctx.fillStyle = '#e94560';
+  ctx.fillRect(painelX + 12, painelY + 12, (painelW - 24) * (player.hp / d.hpMax), 18);
+  ctx.fillStyle = '#fff';
+  ctx.font = 'bold 13px monospace';
+  ctx.fillText('HP: ' + Math.max(0, Math.floor(player.hp)) + '/' + d.hpMax, painelX + 18, painelY + 27);
+
+  ctx.fillStyle = '#000';
+  ctx.fillRect(painelX + 10, painelY + 38, painelW - 20, 16);
+  ctx.fillStyle = '#0f0';
+  ctx.fillRect(painelX + 12, painelY + 40, (painelW - 24) * (player.xp / player.xpProximo), 12);
+  ctx.fillStyle = '#fff';
+  ctx.font = '11px monospace';
+  ctx.fillText('XP: ' + player.xp + '/' + player.xpProximo, painelX + 16, painelY + 50);
+
+  ctx.fillStyle = '#4ea8ff';
+  ctx.font = 'bold 14px monospace';
+  ctx.fillText('Nível ' + player.nivel, painelX + 12, painelY + 74);
+
+  if (player.regenerando) {
+    ctx.fillStyle = '#0f0';
+    ctx.font = 'bold 12px monospace';
+    ctx.fillText('♥ regenerando...', painelX + 12, painelY + 92);
+  } else if (player.pontosDisponiveis > 0) {
+    ctx.fillStyle = '#0f0';
+    ctx.font = 'bold 12px monospace';
+    ctx.fillText('★ ' + player.pontosDisponiveis + ' pts disponíveis (P)', painelX + 12, painelY + 92);
+  }
+}
+
+// ============================================================
+// PLAYER
+// ============================================================
+function desenharPlayer() {
+  const anim = playerAnims[player.animAtual];
+  if (!anim || !anim.img.complete || anim.img.naturalWidth === 0) return;
+
+  const drawX = player.x - camera.x;
+
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+  ctx.beginPath();
+  ctx.ellipse(drawX + player.w / 2, ALTURA_CHAO - 6, player.w / 9, 5, 0, 0, Math.PI * 2);
+  ctx.fill();
+
+  const sx = player.frameAtual * anim.frameW;
+  ctx.save();
+  if (player.invuln > 0 && !player.morrendo && Math.floor(player.invuln / 5) % 2 === 0) {
+    ctx.globalAlpha = 0.4;
+  }
+  if (player.facing < 0) {
+    ctx.translate(drawX + player.w, player.y);
+    ctx.scale(-1, 1);
+    ctx.drawImage(anim.img, sx, 0, anim.frameW, anim.frameH, 0, 0, player.w, player.h);
+  } else {
+    ctx.drawImage(anim.img, sx, 0, anim.frameW, anim.frameH, drawX, player.y, player.w, player.h);
+  }
+  ctx.restore();
+
+  // Barra de stamina
+  const dStam = derivados();
+  const barStamW = 100;
+  const barStamH = 10;
+  const barStamX = drawX + player.w / 2 - barStamW / 2;
+  const barStamY = player.y + player.h - 5;
+
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.85)';
+  ctx.fillRect(barStamX, barStamY, barStamW, barStamH);
+
+  const stamPct = player.stamina / dStam.staminaMax;
+  ctx.fillStyle = '#ffcc00';
+  ctx.fillRect(barStamX + 1, barStamY + 1, (barStamW - 2) * stamPct, barStamH - 2);
+
+  ctx.strokeStyle = '#ffcc00';
+  ctx.lineWidth = 1;
+  ctx.strokeRect(barStamX + 0.5, barStamY + 0.5, barStamW, barStamH);
+}
+
+// ============================================================
+// DESENHO PRINCIPAL
+// ============================================================
+function draw() {
+  if (telaAtual === 'menu') { drawMenu(); return; }
+  if (telaAtual === 'vitoria_fase1') { drawVitoria(1); return; }
+  if (telaAtual === 'vitoria_fase2') { drawVitoria(2); return; }
+  if (telaAtual === 'vitoria_fase3') { drawVitoria(3); return; }
+  if (telaAtual === 'vitoria_fase4') { drawVitoria(4); return; }
+  if (telaAtual === 'vitoria_fase5') { drawVitoria(5); return; }
+  if (telaAtual === 'jogo_completo') { drawJogoCompleto(); return; }
+
+  // Fundo base
+  const grad = ctx.createLinearGradient(0, 0, 0, ALTURA);
+  grad.addColorStop(0, '#1a1a2e');
+  grad.addColorStop(1, '#16213e');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, LARGURA, ALTURA);
+
+  // Fundo parallax por fase
+  let fundoAtual = fundoImg;
+  let fundoLargura = 7680;
+  if (faseAtual === 2) { fundoAtual = fundo2Img; fundoLargura = 11520; }
+  else if (faseAtual === 3) { fundoAtual = fundo3Img; fundoLargura = 11520; }
+  else if (faseAtual === 4) { fundoAtual = fundo4Img; fundoLargura = 11520; }
+  else if (faseAtual === 5) { fundoAtual = fundo5Img; fundoLargura = 11520; }
+  else if (faseAtual === 6) { fundoAtual = fundo6Img; fundoLargura = 11520; }
+
+  if (fundoAtual.complete && fundoAtual.naturalWidth > 0) {
+    const fundoOffset = -camera.x * 0.3;
+    ctx.drawImage(fundoAtual, fundoOffset, 0, fundoLargura, 720);
+  } else {
+    ctx.fillStyle = '#fff';
+    for (let i = 0; i < 60; i++) {
+      ctx.fillRect((i * 137) % LARGURA, (i * 91) % 400, 2, 2);
+    }
+  }
+
+  inimigos.forEach(en => en.draw());
+  desenharPlayer();
+
+  particulas.forEach(p => {
+    const alpha = p.vida / p.vidaMax;
+    ctx.globalAlpha = alpha;
+    ctx.fillStyle = p.cor;
+    ctx.fillRect(p.x - camera.x - p.tamanho / 2, p.y - p.tamanho / 2, p.tamanho, p.tamanho);
+  });
+  ctx.globalAlpha = 1;
+
+  numerosFlutuantes.forEach(n => {
+    ctx.globalAlpha = Math.min(1, n.timer / 30);
+    ctx.fillStyle = n.cor;
+    ctx.font = 'bold 20px monospace';
+    ctx.textAlign = 'center';
+    ctx.strokeStyle = '#000'; ctx.lineWidth = 3;
+    ctx.strokeText(n.texto, n.x - camera.x, n.y);
+    ctx.fillText(n.texto, n.x - camera.x, n.y);
+    ctx.textAlign = 'left';
+    ctx.globalAlpha = 1;
+  });
+
+  desenharHUD();
+
+  if (mensagem.timer > 0) {
+    ctx.globalAlpha = Math.min(1, mensagem.timer / 30);
+    ctx.fillStyle = 'rgba(0,0,0,0.8)';
+    const tw = ctx.measureText(mensagem.texto).width;
+    ctx.fillRect(LARGURA / 2 - tw / 2 - 20, 120, tw + 40, 44);
+    ctx.fillStyle = '#ff0';
+    ctx.font = 'bold 20px monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(mensagem.texto, LARGURA / 2, 150);
+    ctx.textAlign = 'left';
+    ctx.globalAlpha = 1;
+  }
+
+  if (inventarioAberto) drawInventario();
+  if (atributosAberto) drawAtributos();
+  if (telaAtual === 'pausa') drawPausa();
+  if (telaAtual === 'gameover') drawGameOver();
+
+  if (telaAtual === 'jogo') drawPopup();
+}
+
+// ============================================================
+// LOOP
+// ============================================================
+function loop() {
+  update();
+  draw();
+  requestAnimationFrame(loop);
+}
+loop();
+</script>
+</body>
+</html>
